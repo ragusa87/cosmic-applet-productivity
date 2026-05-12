@@ -12,6 +12,7 @@ pub struct Config {
     pub display_tick_secs: u32,
     pub notification_lead_secs: u32,
     pub show_title: bool,
+    pub show_time: bool,
     pub show_progress: bool,
 }
 
@@ -24,6 +25,7 @@ impl Default for Config {
             display_tick_secs: 30,
             notification_lead_secs: 300,
             show_title: true,
+            show_time: true,
             show_progress: true,
         }
     }

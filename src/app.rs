@@ -163,23 +163,16 @@ impl cosmic::Application for AppModel {
             .push(icon_area)
             .push(badge);
 
-        let time_text: Option<Element<'_, Self::Message>> = self.next.as_ref().map(|ev| {
-            text(format_relative(now, ev.start))
-                .size(label_size)
-                .font(cosmic::font::bold())
-                .class(Color::WHITE)
-                .into()
-        });
-        let title_widget: Option<Element<'_, Self::Message>> = if self.config.show_title {
-            self.next.as_ref().map(|ev| {
-                text(truncate_title(&ev.summary, 20))
-                    .size(label_size)
-                    .class(Color::WHITE)
-                    .into()
-            })
-        } else {
-            None
-        };
+        let time_text = self.config.show_time.then(|| {
+            self.next
+                .as_ref()
+                .map(|ev| label_widget(format_relative(now, ev.start), label_size, true))
+        }).flatten();
+        let title_widget = self.config.show_title.then(|| {
+            self.next
+                .as_ref()
+                .map(|ev| label_widget(truncate_title(&ev.summary, 20), label_size, false))
+        }).flatten();
 
         let mut row = Row::new()
             .align_y(cosmic::iced::Alignment::Center)
@@ -559,6 +552,15 @@ fn meeting_progress(now: DateTime<Utc>, ev: &Event) -> f32 {
     #[allow(clippy::cast_precision_loss)]
     let frac = elapsed as f32 / total as f32;
     frac.clamp(0.0, 1.0)
+}
+
+fn label_widget(s: String, size: f32, bold: bool) -> Element<'static, Message> {
+    use cosmic::iced::Color;
+    let mut t = text(s).size(size).class(Color::WHITE);
+    if bold {
+        t = t.font(cosmic::font::bold());
+    }
+    t.into()
 }
 
 fn format_relative(now: DateTime<Utc>, start: DateTime<Utc>) -> String {

@@ -37,6 +37,7 @@ pub enum Msg {
     FormClientId(String),
     FormClientSecret(String),
     ToggleShowTitle(bool),
+    ToggleShowTime(bool),
     ToggleShowProgress(bool),
     Authorize,
     AuthorizeDone(Result<(String, String, Tokens), String>),
@@ -103,6 +104,7 @@ impl cosmic::Application for SettingsApp {
             on_client_id: Msg::FormClientId,
             on_client_secret: Msg::FormClientSecret,
             on_toggle_show_title: Msg::ToggleShowTitle,
+            on_toggle_show_time: Msg::ToggleShowTime,
             on_toggle_show_progress: Msg::ToggleShowProgress,
             authorize: Msg::Authorize,
             cancel: Msg::Cancel,
@@ -110,6 +112,7 @@ impl cosmic::Application for SettingsApp {
         ui::settings_view(
             &self.form,
             self.config.show_title,
+            self.config.show_time,
             self.config.show_progress,
             &self.status,
             self.authorizing,
@@ -125,6 +128,11 @@ impl cosmic::Application for SettingsApp {
 
             Msg::ToggleShowTitle(on) => {
                 self.config.show_title = on;
+                persist_config(&self.config);
+            }
+
+            Msg::ToggleShowTime(on) => {
+                self.config.show_time = on;
                 persist_config(&self.config);
             }
 

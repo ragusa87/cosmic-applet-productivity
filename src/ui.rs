@@ -60,14 +60,17 @@ pub struct SettingsHandlers<M: Clone> {
     pub on_client_id: fn(String) -> M,
     pub on_client_secret: fn(String) -> M,
     pub on_toggle_show_title: fn(bool) -> M,
+    pub on_toggle_show_time: fn(bool) -> M,
     pub on_toggle_show_progress: fn(bool) -> M,
     pub authorize: M,
     pub cancel: M,
 }
 
+#[allow(clippy::fn_params_excessive_bools)]
 pub fn settings_view<'a, M: Clone + 'static>(
     form: &'a CredentialsForm,
     show_title: bool,
+    show_time: bool,
     show_progress: bool,
     status: &'a Status,
     authorizing: bool,
@@ -119,6 +122,10 @@ pub fn settings_view<'a, M: Clone + 'static>(
 
     let display_section = settings::section()
         .title("Display")
+        .add(settings::item(
+            "Show event time next to icon",
+            toggler(show_time).on_toggle(handlers.on_toggle_show_time),
+        ))
         .add(settings::item(
             "Show event title next to countdown",
             toggler(show_title).on_toggle(handlers.on_toggle_show_title),

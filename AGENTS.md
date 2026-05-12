@@ -51,7 +51,7 @@ src/
 ├── config.rs      cosmic-config schema: email, client_id,
 │                  fetch_interval_secs, display_tick_secs,
 │                  notification_lead_secs, show_title,
-│                  show_progress
+│                  show_time, show_progress
 ├── secrets.rs     keyring wrapper — stores a JSON blob keyed by email under
 │                  service "cosmic-google-agenda-panel:tokens" (sync API
 │                  wrapped in spawn_blocking)
@@ -77,7 +77,7 @@ data/
 
 | Item | Where | Reason |
 |---|---|---|
-| `email`, `client_id`, `fetch_interval_secs`, `display_tick_secs`, `notification_lead_secs`, `show_title`, `show_progress` | cosmic-config (RON in `~/.config/io.github.cosmic_google_agenda_panel/v1/`) | non-secret, watched live |
+| `email`, `client_id`, `fetch_interval_secs`, `display_tick_secs`, `notification_lead_secs`, `show_title`, `show_time`, `show_progress` | cosmic-config (RON in `~/.config/io.github.cosmic_google_agenda_panel/v1/`) | non-secret, watched live |
 | `client_secret`, `refresh_token`, `access_token`, `expires_at_unix` | Secret Service via `keyring` v3, one JSON blob keyed by `email` under service `cosmic-google-agenda-panel:tokens` | secrets |
 
 Cross-binary propagation: the settings binary writes both. The applet's
