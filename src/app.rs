@@ -120,13 +120,15 @@ impl cosmic::Application for AppModel {
         let count_text = text(label)
             .size(text_size)
             .class(cosmic::iced::Color::WHITE)
-            .font(cosmic::font::bold());
+            .font(cosmic::font::bold())
+            .align_x(cosmic::iced::alignment::Horizontal::Right)
+            .align_y(cosmic::iced::alignment::Vertical::Bottom);
 
         let count_overlay = cosmic::widget::container(count_text)
             .width(cosmic::iced::Length::Fixed(icon_px))
             .height(cosmic::iced::Length::Fixed(icon_px))
-            .align_x(cosmic::iced::Alignment::End)
-            .align_y(cosmic::iced::Alignment::Start);
+            .align_x(cosmic::iced::alignment::Horizontal::Right)
+            .align_y(cosmic::iced::alignment::Vertical::Bottom);
 
         let stacked = cosmic::iced::widget::Stack::new()
             .width(cosmic::iced::Length::Fixed(icon_px))
