@@ -4,6 +4,7 @@ use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{Column, Row, button, scrollable, settings, text, text_input, toggler};
 
 use crate::app::Message;
+use crate::calendar::Event;
 
 #[derive(Debug, Clone, Default)]
 pub enum Status {
@@ -49,6 +50,60 @@ pub fn menu_view<'a>() -> Element<'a, Message> {
         .spacing(0)
         .push(menu_button(text::body("Settings\u{2026}")).on_press(Message::OpenCredentials))
         .into()
+}
+
+pub fn event_info_view<'a>(event: Option<&'a Event>, calendar_url: &str) -> Element<'a, Message> {
+    let header: Element<'_, Message> = match event {
+        Some(ev) => {
+            let mut col = Column::new()
+                .padding([8, 16])
+                .spacing(4)
+                .width(Length::Fill)
+                .push(text::title4(ev.summary.clone()))
+                .push(text::body(format_event_when(ev)));
+            if let Some(loc) = ev.location.as_deref() {
+                col = col.push(text::body(format!("\u{1f4cd} {loc}")));
+            }
+            col.into()
+        }
+        None => Column::new()
+            .padding([8, 16])
+            .width(Length::Fill)
+            .push(text::body("No upcoming events"))
+            .into(),
+    };
+
+    let (label, url) = match event.and_then(|e| e.meet_url.as_deref()) {
+        Some(u) => ("Open in Google Meet\u{2026}", u.to_owned()),
+        None => ("Open calendar\u{2026}", calendar_url.to_owned()),
+    };
+
+    Column::new()
+        .padding([8, 0])
+        .spacing(4)
+        .width(Length::Fill)
+        .push(header)
+        .push(menu_button(text::body(label)).on_press(Message::OpenUrl(url)))
+        .into()
+}
+
+fn format_event_when(ev: &Event) -> String {
+    let start = ev.start.with_timezone(&chrono::Local);
+    let end = ev.end.with_timezone(&chrono::Local);
+    if start.date_naive() == end.date_naive() {
+        format!(
+            "{}\n{} \u{2013} {}",
+            start.format("%A, %B %-d, %Y"),
+            start.format("%H:%M"),
+            end.format("%H:%M"),
+        )
+    } else {
+        format!(
+            "{}\n\u{2192} {}",
+            start.format("%a, %b %-d, %Y %H:%M"),
+            end.format("%a, %b %-d, %Y %H:%M"),
+        )
+    }
 }
 
 /// Builders for the messages emitted by the settings form. The form widget

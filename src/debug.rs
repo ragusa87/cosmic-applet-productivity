@@ -193,6 +193,9 @@ fn print_item(index: usize, item: &DebugItem) {
     if let Some(m) = &item.meet_url {
         println!("    meet:         {m}");
     }
+    if let Some(l) = &item.location {
+        println!("    location:     {l}");
+    }
     match &item.verdict {
         Ok(_) => println!("    VERDICT:      KEEP"),
         Err(reason) => println!("    VERDICT:      SKIP — {reason}"),

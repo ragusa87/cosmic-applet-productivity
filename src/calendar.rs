@@ -12,6 +12,7 @@ pub struct Event {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub meet_url: Option<String>,
+    pub location: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +46,7 @@ pub struct DebugItem {
     pub self_response: Option<String>,
     pub attendee_count: usize,
     pub meet_url: Option<String>,
+    pub location: Option<String>,
     pub verdict: Result<Event, SkipReason>,
 }
 
@@ -120,12 +122,19 @@ fn build_event(raw: RawEvent) -> Event {
     let start = raw.start.date_time.unwrap_or_else(Utc::now);
     let end = raw.end.as_ref().and_then(|e| e.date_time).unwrap_or(start);
     let meet_url = extract_meet_url(&raw);
+    let location = raw
+        .location
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
     Event {
         id: raw.id,
         summary: raw.summary.unwrap_or_else(|| "(no title)".to_owned()),
         start,
         end,
         meet_url,
+        location,
     }
 }
 
@@ -151,6 +160,12 @@ fn to_debug_item(raw: RawEvent) -> DebugItem {
     let status = raw.status.clone();
     let transparency = raw.transparency.clone();
     let meet_url = extract_meet_url(&raw);
+    let location = raw
+        .location
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
     let verdict = verdict_result.map(|_| build_event(raw));
     DebugItem {
         id,
@@ -162,6 +177,7 @@ fn to_debug_item(raw: RawEvent) -> DebugItem {
         self_response,
         attendee_count,
         meet_url,
+        location,
         verdict,
     }
 }
@@ -216,6 +232,8 @@ struct RawEvent {
     conference_data: Option<RawConferenceData>,
     #[serde(default)]
     attendees: Option<Vec<RawAttendee>>,
+    #[serde(default)]
+    location: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

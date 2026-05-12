@@ -26,6 +26,7 @@ pub struct AppModel {
     pub core: cosmic::Core,
     pub config: Config,
     pub menu_popup: Option<Id>,
+    pub info_popup: Option<Id>,
     pub tokens: Option<Tokens>,
     pub events: Vec<Event>,
     pub next: Option<Event>,
@@ -39,6 +40,7 @@ pub enum Message {
     OpenMenu,
     PopupClosed(Id),
     OpenCredentials,
+    OpenUrl(String),
 
     Tick,
     Refetch,
@@ -226,38 +228,54 @@ impl cosmic::Application for AppModel {
             Message::LeftClick => {
                 // Drop the click when the menu popup is up. Wayland can deliver
                 // the click event to the panel surface as the popup's grab is
-                // being dismissed, which would otherwise open the browser when
-                // the user meant to interact with the menu.
+                // being dismissed, which would otherwise re-open the info popup
+                // when the user meant to interact with the menu.
                 if self.menu_popup.is_some() {
                     return Task::none();
                 }
-                let target = self
-                    .next
-                    .as_ref()
-                    .and_then(|ev| ev.meet_url.clone())
-                    .unwrap_or_else(|| CALENDAR_URL.to_owned());
-                return cosmic::task::future(async move {
-                    let _ = tokio::process::Command::new("xdg-open")
-                        .arg(target)
-                        .status()
-                        .await;
-                    Message::NoOp
-                });
+                if let Some(id) = self.info_popup.take() {
+                    return dispatch_surface(destroy_popup(id));
+                }
+                let new_id = Id::unique();
+                self.info_popup = Some(new_id);
+                return open_info_popup(new_id);
             }
 
             Message::OpenMenu => {
                 if let Some(id) = self.menu_popup.take() {
                     return dispatch_surface(destroy_popup(id));
                 }
+                let close_info = self
+                    .info_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
                 let new_id = Id::unique();
                 self.menu_popup = Some(new_id);
-                return open_menu_popup(new_id);
+                return Task::batch([close_info, open_menu_popup(new_id)]);
             }
 
             Message::PopupClosed(id) => {
                 if self.menu_popup.as_ref() == Some(&id) {
                     self.menu_popup = None;
                 }
+                if self.info_popup.as_ref() == Some(&id) {
+                    self.info_popup = None;
+                }
+            }
+
+            Message::OpenUrl(url) => {
+                let close_info = self
+                    .info_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                let launch = cosmic::task::future(async move {
+                    let _ = tokio::process::Command::new("xdg-open")
+                        .arg(url)
+                        .status()
+                        .await;
+                    Message::NoOp
+                });
+                return Task::batch([close_info, launch]);
             }
 
             Message::OpenCredentials => {
@@ -398,6 +416,28 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
         },
         Some(Box::new(|state: &AppModel| {
             let body = ui::menu_view();
+            Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
+        })),
+    );
+    dispatch_surface(action)
+}
+
+fn open_info_popup(new_id: Id) -> Task<Message> {
+    let action = surface::action::app_popup::<AppModel>(
+        move |state: &mut AppModel| {
+            let parent = state.core.main_window_id().unwrap_or(Id::NONE);
+            let mut settings =
+                state.core.applet.get_popup_settings(parent, new_id, None, None, None);
+            settings.grab = true;
+            settings.positioner.size_limits = Limits::NONE
+                .max_width(360.0)
+                .min_width(240.0)
+                .min_height(80.0)
+                .max_height(320.0);
+            settings
+        },
+        Some(Box::new(|state: &AppModel| {
+            let body = ui::event_info_view(state.next.as_ref(), CALENDAR_URL);
             Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
         })),
     );
@@ -609,6 +649,7 @@ mod tests {
             start: ts(start_h, 0),
             end: ts(end_h, 0),
             meet_url: None,
+            location: None,
         }
     }
 
@@ -681,6 +722,7 @@ mod tests {
             start,
             end,
             meet_url: None,
+            location: None,
         };
         assert!((meeting_progress(start, &event) - 0.0).abs() < 1e-6);
         assert!((meeting_progress(start + Duration::minutes(30), &event) - 0.5).abs() < 1e-6);
