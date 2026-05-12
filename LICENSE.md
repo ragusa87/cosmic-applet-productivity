@@ -20,6 +20,6 @@ Copyright (C) 2026 Laurent Constantin
 
 ## Icon
 
-The Gmail icon (`data/icons/io.github.cosmic_applet_gmail.svg`) is from
+The Gmail icon (`data/icons/com.github.ragusa87.CosmicAppletGmail.svg`) is from
 [Simple Icons](https://simpleicons.org/?q=gmail) and is licensed under
 [CC0 1.0 Universal](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md).

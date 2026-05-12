@@ -26,8 +26,8 @@ just install-user        # installs into ~/.local; use `sudo just install` for /
 `just install-user` lays the binary, desktop entry, and icon into:
 
 - `~/.local/bin/cosmic-applet-gmail`
-- `~/.local/share/applications/io.github.cosmic_applet_gmail.desktop`
-- `~/.local/share/icons/hicolor/scalable/apps/io.github.cosmic_applet_gmail.svg`
+- `~/.local/share/applications/com.github.ragusa87.CosmicAppletGmail.desktop`
+- `~/.local/share/icons/hicolor/scalable/apps/com.github.ragusa87.CosmicAppletGmail.svg`
 
 > ⚠️ `~/.local/bin` must be on your `$PATH` — the panel runs `Exec=cosmic-applet-gmail`
 > and resolves it via `PATH`. Most distros add it automatically; check with
@@ -132,7 +132,7 @@ environment.
 
 ## Configuration
 
-Non-secret settings live in `~/.config/io.github.cosmic_applet_gmail/v1/`:
+Non-secret settings live in `~/.config/com.github.ragusa87.CosmicAppletGmail/v1/`:
 
 | Key                 | Default | Notes                              |
 |---------------------|---------|------------------------------------|

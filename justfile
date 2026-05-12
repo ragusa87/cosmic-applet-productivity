@@ -1,5 +1,5 @@
 name := 'cosmic-applet-gmail'
-appid := 'io.github.cosmic_applet_gmail'
+appid := 'com.github.ragusa87.CosmicAppletGmail'
 
 rootdir := ''
 prefix := '/usr'

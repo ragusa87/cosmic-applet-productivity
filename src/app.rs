@@ -16,7 +16,7 @@ use crate::ui;
 
 const GMAIL_URL: &str = "https://mail.google.com";
 const GMAIL_ICON_SVG: &[u8] =
-    include_bytes!("../data/icons/io.github.cosmic_applet_gmail.svg");
+    include_bytes!("../data/icons/com.github.ragusa87.CosmicAppletGmail.svg");
 
 #[derive(Default)]
 pub struct AppModel {

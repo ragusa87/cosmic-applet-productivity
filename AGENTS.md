@@ -16,7 +16,7 @@ Two modes ship in **one binary**, picked by `argv`:
 
 The applet's right-click menu → **Credentials…** spawns `current_exe()` with
 `--show-settings`, which is how the user reaches the OAuth setup. Both modes
-share `APP_ID = "io.github.cosmic_applet_gmail"` so they read/write the same
+share `APP_ID = "com.github.ragusa87.CosmicAppletGmail"` so they read/write the same
 cosmic-config namespace and the same Secret Service entry.
 
 ## Why two modes, not two binaries
@@ -51,8 +51,8 @@ src/
                    (+ unit tests on the JSON parsing path)
 
 data/
-├── io.github.cosmic_applet_gmail.desktop   panel applet .desktop entry
-└── icons/io.github.cosmic_applet_gmail.svg Gmail-red envelope (SimpleIcons)
+├── com.github.ragusa87.CosmicAppletGmail.desktop   panel applet .desktop entry
+└── icons/com.github.ragusa87.CosmicAppletGmail.svg Gmail-red envelope (SimpleIcons)
                                             also `include_bytes!`'d into the
                                             binary for the panel button
 ```
@@ -61,7 +61,7 @@ data/
 
 | Item | Where | Reason |
 |---|---|---|
-| `email`, `client_id`, `poll_interval_secs` | cosmic-config (RON in `~/.config/io.github.cosmic_applet_gmail/v1/`) | non-secret, watched live |
+| `email`, `client_id`, `poll_interval_secs` | cosmic-config (RON in `~/.config/com.github.ragusa87.CosmicAppletGmail/v1/`) | non-secret, watched live |
 | `client_secret`, `refresh_token`, `access_token`, `expires_at_unix` | Secret Service via `keyring` v3, one JSON blob keyed by `email` under service `cosmic-applet-gmail:tokens` | secrets |
 
 Cross-binary propagation: the settings binary writes both. The applet's

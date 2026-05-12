@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "COSMIC panel applet that shows the Gmail unread count"
-repository = "https://github.com/laurent-c/cosmic-applet-gmail"
+repository = "https://github.com/ragusa87/cosmic-applet-gmail"
 
 [[bin]]
 name = "cosmic-applet-gmail"
