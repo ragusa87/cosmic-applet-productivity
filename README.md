@@ -143,8 +143,9 @@ Non-secret settings live in `~/.config/com.github.ragusa87.CosmicAppletGmail/v1/
 You can edit `poll_interval_secs` by hand; the applet picks up changes live.
 
 Secrets are stored under Secret Service entry
-`cosmic-applet-gmail:tokens / {email}` as a JSON blob containing
-`client_secret`, `refresh_token`, `access_token`, and `expires_at_unix`.
+`com.github.ragusa87.CosmicAppletGmail:tokens / {email}` as a JSON blob
+containing `client_secret`, `refresh_token`, `access_token`, and
+`expires_at_unix`.
 
 ## Troubleshooting
 

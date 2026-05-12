@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const SERVICE: &str = "cosmic-applet-gmail:tokens";
+use crate::config::APP_ID;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Tokens {
@@ -40,7 +40,8 @@ impl From<keyring::Error> for SecretsError {
 }
 
 fn entry(email: &str) -> Result<keyring::Entry, SecretsError> {
-    keyring::Entry::new(SERVICE, email).map_err(SecretsError::from)
+    let service = format!("{APP_ID}:tokens");
+    keyring::Entry::new(&service, email).map_err(SecretsError::from)
 }
 
 pub async fn load(email: &str) -> Result<Tokens, SecretsError> {

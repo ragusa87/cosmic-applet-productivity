@@ -43,7 +43,7 @@ src/
 │                  CredentialsForm + Status types
 ├── config.rs      cosmic-config schema: email, client_id, poll_interval_secs
 ├── secrets.rs     keyring wrapper — stores a JSON blob keyed by email under
-│                  service "cosmic-applet-gmail:tokens" (sync API wrapped in
+│                  service "{APP_ID}:tokens" (sync API wrapped in
 │                  spawn_blocking)
 ├── auth.rs        OAuth 2.0 PKCE + loopback redirect via the `oauth2` crate;
 │                  exports `start_oauth_flow` + `refresh`
@@ -62,7 +62,7 @@ data/
 | Item | Where | Reason |
 |---|---|---|
 | `email`, `client_id`, `poll_interval_secs` | cosmic-config (RON in `~/.config/com.github.ragusa87.CosmicAppletGmail/v1/`) | non-secret, watched live |
-| `client_secret`, `refresh_token`, `access_token`, `expires_at_unix` | Secret Service via `keyring` v3, one JSON blob keyed by `email` under service `cosmic-applet-gmail:tokens` | secrets |
+| `client_secret`, `refresh_token`, `access_token`, `expires_at_unix` | Secret Service via `keyring` v3, one JSON blob keyed by `email` under service `{APP_ID}:tokens` (e.g. `com.github.ragusa87.CosmicAppletGmail:tokens`) | secrets |
 
 Cross-binary propagation: the settings binary writes both. The applet's
 `watch_config::<Config>` subscription delivers `Message::UpdateConfig` when
