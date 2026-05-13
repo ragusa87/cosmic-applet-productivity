@@ -18,8 +18,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 Copyright (C) 2026 Laurent Constantin
 
-## Icon
+## Icons
 
-The Gmail icon (`data/icons/com.github.ragusa87.CosmicAppletGmail.svg`) is from
-[Simple Icons](https://simpleicons.org/?q=gmail) and is licensed under
-[CC0 1.0 Universal](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md).
+Both panel icons are from [Simple Icons](https://simpleicons.org/) and are
+licensed under
+[CC0 1.0 Universal](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md):
+
+- `cosmic-applet-gmail/data/icons/com.github.ragusa87.CosmicAppletGmail.svg`
+  — Gmail icon ([Simple Icons / Gmail](https://simpleicons.org/?q=gmail)).
+- `cosmic-applet-google-agenda/data/icons/com.github.ragusa87.CosmicAppletGoogleAgenda.svg`
+  — Google Calendar icon
+  ([Simple Icons / Google Calendar](https://simpleicons.org/?q=google+calendar)).
