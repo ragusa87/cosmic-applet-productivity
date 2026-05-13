@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Gmail Unread
+Comment=Show the Gmail unread count in the COSMIC panel
+Exec=cosmic-applet-gmail
+Icon=com.github.ragusa87.CosmicAppletGmail
+Terminal=false
+Categories=COSMIC;X-COSMIC-Applet;
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=2
