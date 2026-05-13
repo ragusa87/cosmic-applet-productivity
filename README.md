@@ -138,8 +138,8 @@ cosmic-applet-google-agenda --show-settings
 Each applet polls on its own cadence. To trigger an immediate refresh:
 
 ```sh
-pkill -USR2 cosmic-applet-gmail            # poll Gmail right now
-pkill -USR2 cosmic-applet-google-agenda    # refetch calendar right now
+pkill -USR2 -f cosmic-applet-gmail            # poll Gmail right now
+pkill -USR2 -f cosmic-applet-google-agenda    # refetch calendar right now
 ```
 
 On receiving SIGUSR2, the applet reloads the OAuth tokens from Secret
