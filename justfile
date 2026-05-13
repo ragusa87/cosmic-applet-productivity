@@ -31,6 +31,10 @@ run-gmail *args:
 run-agenda *args:
     env RUST_BACKTRACE=full cargo run --release -p cosmic-applet-google-agenda {{args}}
 
+refresh:
+    -pkill -USR2 -f cosmic-applet-gmail            # poll Gmail right now
+    -pkill -USR2 -f cosmic-applet-google-agenda    # refetch calendar right now
+
 install: \
     (_install-system gmail-name gmail-appid) \
     (_install-system agenda-name agenda-appid)

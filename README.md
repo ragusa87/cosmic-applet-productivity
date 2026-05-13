@@ -142,6 +142,12 @@ pkill -USR2 -f cosmic-applet-gmail            # poll Gmail right now
 pkill -USR2 -f cosmic-applet-google-agenda    # refetch calendar right now
 ```
 
+Or, to signal both at once:
+
+```sh
+just refresh
+```
+
 On receiving SIGUSR2, the applet reloads the OAuth tokens from Secret
 Service and fetches right away. The settings windows (running under the
 same binary names) ignore SIGUSR2, so sending the signal to all processes
