@@ -39,6 +39,7 @@ pub enum Message {
     Tick,
     Fetched(Result<(Tokens, u64), String>),
     ForceRefresh,
+    RefreshFromMenu,
 
     UpdateConfig(Config),
     TokensLoaded(Option<Tokens>),
@@ -299,6 +300,15 @@ impl cosmic::Application for AppModel {
                     let tokens = secrets::load(KEYRING_SERVICE, &email).await.ok();
                     Message::TokensLoaded(tokens)
                 });
+            }
+
+            Message::RefreshFromMenu => {
+                let destroy_menu = self
+                    .menu_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                let refresh = cosmic::task::message(cosmic::Action::App(Message::ForceRefresh));
+                return Task::batch([destroy_menu, refresh]);
             }
 
             Message::UpdateConfig(config) => {

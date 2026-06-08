@@ -45,6 +45,7 @@ pub enum Message {
 
     Tick,
     Refetch,
+    RefreshFromMenu,
     Fetched(Result<(Tokens, Vec<Event>), String>),
 
     UpdateConfig(Config),
@@ -313,6 +314,15 @@ impl cosmic::Application for AppModel {
                     0
                 };
                 maybe_notify(self.next.as_ref(), &mut self.notified, lead, now);
+            }
+
+            Message::RefreshFromMenu => {
+                let destroy_menu = self
+                    .menu_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                let refresh = cosmic::task::message(cosmic::Action::App(Message::Refetch));
+                return Task::batch([destroy_menu, refresh]);
             }
 
             Message::Refetch => {
