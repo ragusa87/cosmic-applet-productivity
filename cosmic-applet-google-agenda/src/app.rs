@@ -708,7 +708,7 @@ mod tests {
     #[test]
     fn decide_notify_fires_within_lead_window_once() {
         let now = ts(0, 0);
-        let mut events = vec![ev("e1", 0, 1)];
+        let mut events = [ev("e1", 0, 1)];
         events[0].start = now + Duration::minutes(3);
         let mut notified = HashSet::new();
         assert!(decide_notify(Some(&events[0]), &mut notified, 300, now).is_some());
@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn decide_notify_skips_when_lead_zero() {
         let now = ts(0, 0);
-        let mut events = vec![ev("e1", 0, 1)];
+        let mut events = [ev("e1", 0, 1)];
         events[0].start = now + Duration::minutes(3);
         let mut notified = HashSet::new();
         assert!(decide_notify(Some(&events[0]), &mut notified, 0, now).is_none());
@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn decide_notify_skips_outside_lead_window() {
         let now = ts(0, 0);
-        let mut events = vec![ev("future", 0, 1)];
+        let mut events = [ev("future", 0, 1)];
         events[0].start = now + Duration::minutes(30);
         let mut notified = HashSet::new();
         assert!(decide_notify(Some(&events[0]), &mut notified, 300, now).is_none());
