@@ -21,8 +21,7 @@ pub fn run() -> iced::Result {
         libc::signal(libc::SIGUSR2, libc::SIG_IGN);
     }
 
-    let settings = cosmic::app::Settings::default()
-        .size(Size::new(500.0, 360.0));
+    let settings = cosmic::app::Settings::default().size(Size::new(500.0, 360.0));
     cosmic::app::run::<SettingsApp>(settings, ())
 }
 
@@ -135,8 +134,12 @@ impl cosmic::Application for SettingsApp {
                 let client_secret = self.form.client_secret.clone();
 
                 return cosmic::task::future(async move {
-                    let params = OAuthParams { scope: SCOPE, success_html: SUCCESS_HTML };
-                    let result = auth::start_oauth_flow(params, client_id.clone(), client_secret).await;
+                    let params = OAuthParams {
+                        scope: SCOPE,
+                        success_html: SUCCESS_HTML,
+                    };
+                    let result =
+                        auth::start_oauth_flow(params, client_id.clone(), client_secret).await;
                     let result = result
                         .map(|tokens| (email, client_id, tokens))
                         .map_err(|e| e.to_string());

@@ -82,9 +82,7 @@ async fn screensaver_subscription() -> anyhow::Result<BoolStream> {
     let stream = proxy
         .receive_active_changed()
         .await?
-        .filter_map(|signal| async move {
-            signal.args().ok().map(|a| a.active)
-        });
+        .filter_map(|signal| async move { signal.args().ok().map(|a| a.active) });
     Ok(Box::pin(stream))
 }
 
@@ -94,8 +92,6 @@ async fn sleep_subscription() -> anyhow::Result<BoolStream> {
     let stream = proxy
         .receive_prepare_for_sleep()
         .await?
-        .filter_map(|signal| async move {
-            signal.args().ok().map(|a| a.start)
-        });
+        .filter_map(|signal| async move { signal.args().ok().map(|a| a.start) });
     Ok(Box::pin(stream))
 }

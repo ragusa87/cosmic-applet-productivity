@@ -91,9 +91,8 @@ impl cosmic::Application for SettingsApp {
 
         let form = Form::from_config(&config);
         let cfg = config.clone();
-        let task = cosmic::task::future(async move {
-            Msg::TaxiReady(TaxiRunner::detect(&cfg).await)
-        });
+        let task =
+            cosmic::task::future(async move { Msg::TaxiReady(TaxiRunner::detect(&cfg).await) });
 
         (
             Self {
@@ -129,15 +128,15 @@ impl cosmic::Application for SettingsApp {
         let round = text_input("15", &self.form.round_min)
             .label("Round minimum (minutes)")
             .on_input(Msg::FormRoundMin);
-        let cmd = text_input("uv run --with taxi,taxi-zebra taxi", &self.form.taxi_command)
-            .label("Taxi command")
-            .on_input(Msg::FormTaxiCommand);
-        let taxirc = text_input(
-            "(default: ~/.config/taxi/taxirc)",
-            &self.form.taxirc_path,
+        let cmd = text_input(
+            "uv run --with taxi,taxi-zebra taxi",
+            &self.form.taxi_command,
         )
-        .label("taxirc path")
-        .on_input(Msg::FormTaxircPath);
+        .label("Taxi command")
+        .on_input(Msg::FormTaxiCommand);
+        let taxirc = text_input("(default: ~/.config/taxi/taxirc)", &self.form.taxirc_path)
+            .label("taxirc path")
+            .on_input(Msg::FormTaxircPath);
 
         let mut diag = Column::new().spacing(2);
         match self.taxi.as_ref() {

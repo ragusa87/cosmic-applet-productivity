@@ -254,10 +254,9 @@ impl cosmic::Application for AppModel {
         let (icon_size, _) = self.core.applet.suggested_size(true);
         let (pad_major, pad_minor) = self.core.applet.suggested_padding(true);
 
-        let icon = cosmic::widget::icon(cosmic::widget::icon::from_svg_bytes(
-            TAXI_ICON_SVG.to_vec(),
-        ))
-        .size(icon_size);
+        let icon =
+            cosmic::widget::icon(cosmic::widget::icon::from_svg_bytes(TAXI_ICON_SVG.to_vec()))
+                .size(icon_size);
 
         let label = self.panel_label_text(is_horizontal);
 
@@ -293,8 +292,8 @@ impl cosmic::Application for AppModel {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        let one_sec = cosmic::iced::time::every(std::time::Duration::from_secs(1))
-            .map(|_| Message::Tick);
+        let one_sec =
+            cosmic::iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::Tick);
         let minute = cosmic::iced::time::every(std::time::Duration::from_mins(1))
             .map(|_| Message::AutoExportTick);
         let watch = self
@@ -363,10 +362,7 @@ impl cosmic::Application for AppModel {
 
             Message::StartPause(id) => {
                 let now = Local::now();
-                let running = self
-                    .state
-                    .find_timer(id)
-                    .is_some_and(Timer::is_running);
+                let running = self.state.find_timer(id).is_some_and(Timer::is_running);
                 if running {
                     self.state.pause_timer(id, now);
                 } else {
@@ -569,9 +565,7 @@ impl cosmic::Application for AppModel {
                 self.taxi = runner;
                 let path = Taxirc::resolve_path(&self.config);
                 let fetch_taxirc = path.map_or_else(Task::none, |p| {
-                    cosmic::task::future(async move {
-                        Message::Taxirc(taxi::load_taxirc(&p).ok())
-                    })
+                    cosmic::task::future(async move { Message::Taxirc(taxi::load_taxirc(&p).ok()) })
                 });
                 let fetch_aliases = if self.taxi.available {
                     let runner = self.taxi.clone();
@@ -610,11 +604,7 @@ impl AppModel {
         let now = Local::now();
         let day = state::cutover_date(now, self.config.cutover_hour());
         let elapsed = state::sum_for_date(t, day, self.config.cutover_hour(), now);
-        Some(format!(
-            "{} {}",
-            t.alias,
-            fmt_duration_hms_short(elapsed)
-        ))
+        Some(format!("{} {}", t.alias, fmt_duration_hms_short(elapsed)))
     }
 
     fn persist(&self) {
@@ -660,21 +650,13 @@ impl AppModel {
             .filter_map(|(alias, description)| {
                 let score = score_match(&alias, &description, &q);
                 if score > 0 || q.is_empty() {
-                    Some((
-                        score,
-                        AliasSuggestion {
-                            alias,
-                            description,
-                        },
-                    ))
+                    Some((score, AliasSuggestion { alias, description }))
                 } else {
                     None
                 }
             })
             .collect();
-        scored.sort_by(|a, b| {
-            b.0.cmp(&a.0).then_with(|| a.1.alias.cmp(&b.1.alias))
-        });
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.alias.cmp(&b.1.alias)));
         scored.into_iter().take(12).map(|(_, s)| s).collect()
     }
 
@@ -692,13 +674,7 @@ impl AppModel {
             return;
         };
         let today = state::cutover_date(Local::now(), self.config.cutover_hour());
-        run_auto_export(
-            &mut self.state,
-            self.editing,
-            &rc,
-            &self.config,
-            today,
-        );
+        run_auto_export(&mut self.state, self.editing, &rc, &self.config, today);
     }
 
     /// Seed `state.timers` with one row per distinct alias found in the
@@ -709,11 +685,9 @@ impl AppModel {
         };
         let cutover = self.config.cutover_hour();
         let today = state::cutover_date(Local::now(), cutover);
-        let first_of_month = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
-            .unwrap_or(today);
-        let prev_month = first_of_month
-            .pred_opt()
-            .unwrap_or(first_of_month);
+        let first_of_month =
+            chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap_or(today);
+        let prev_month = first_of_month.pred_opt().unwrap_or(first_of_month);
 
         let mut latest_desc: BTreeMap<String, (chrono::NaiveDate, String)> = BTreeMap::new();
         for date in [today, prev_month] {
@@ -768,7 +742,11 @@ impl AppModel {
             .map(|t| t.alias.clone())
             .unwrap_or_default();
         if alias != prev_alias
-            && self.state.timers.iter().any(|t| t.id != id && t.alias == alias)
+            && self
+                .state
+                .timers
+                .iter()
+                .any(|t| t.id != id && t.alias == alias)
         {
             anyhow::bail!("another timer already uses alias '{alias}'");
         }
@@ -786,19 +764,13 @@ impl AppModel {
                 None
             } else {
                 Some(
-                    parse_clock(end_text).ok_or_else(|| {
-                        anyhow::anyhow!("invalid end time '{}'", row.end)
-                    })?,
+                    parse_clock(end_text)
+                        .ok_or_else(|| anyhow::anyhow!("invalid end time '{}'", row.end))?,
                 )
             };
 
-            let start_dt = resolve_dt(
-                row.original_start,
-                row.date,
-                row.start.trim(),
-                start_time,
-            )
-            .ok_or_else(|| anyhow::anyhow!("could not place start on row's date"))?;
+            let start_dt = resolve_dt(row.original_start, row.date, row.start.trim(), start_time)
+                .ok_or_else(|| anyhow::anyhow!("could not place start on row's date"))?;
 
             let end_dt = if let Some(t) = parsed_end {
                 let dt = match row.original_end {
@@ -903,9 +875,7 @@ fn run_auto_export(
             by_date.entry(date).or_default().extend(block_lines);
 
             for (idx, s) in timer.sessions.iter().enumerate() {
-                if s.end.is_some()
-                    && state::cutover_date(s.start, cutover) == date
-                {
+                if s.end.is_some() && state::cutover_date(s.start, cutover) == date {
                     to_export.push((timer.id, idx));
                 }
             }
@@ -990,8 +960,8 @@ fn resolve_dt(
     displayed: &str,
     parsed: NaiveTime,
 ) -> Option<chrono::DateTime<Local>> {
-    let unchanged = original.date_naive() == date
-        && original.format("%H:%M").to_string() == displayed;
+    let unchanged =
+        original.date_naive() == date && original.format("%H:%M").to_string() == displayed;
     if unchanged {
         Some(original)
     } else {
@@ -1019,20 +989,23 @@ fn dispatch_surface(a: surface::Action) -> Task<Message> {
 }
 
 fn sigusr2_stream() -> impl cosmic::iced::futures::Stream<Item = Message> {
-    cosmic::iced::stream::channel(4, |mut sender: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
-        let mut sig = match signal(SignalKind::user_defined2()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to install SIGUSR2 handler");
-                return;
+    cosmic::iced::stream::channel(
+        4,
+        |mut sender: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
+            let mut sig = match signal(SignalKind::user_defined2()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to install SIGUSR2 handler");
+                    return;
+                }
+            };
+            while sig.recv().await.is_some() {
+                if sender.send(Message::ForceRefresh).await.is_err() {
+                    break;
+                }
             }
-        };
-        while sig.recv().await.is_some() {
-            if sender.send(Message::ForceRefresh).await.is_err() {
-                break;
-            }
-        }
-    })
+        },
+    )
 }
 
 fn sigusr2_subscription() -> Subscription<Message> {
@@ -1066,8 +1039,10 @@ fn open_popup(new_id: Id) -> Task<Message> {
     let action = surface::action::app_popup::<AppModel>(
         move |state: &mut AppModel| {
             let parent = state.core.main_window_id().unwrap_or(Id::NONE);
-            let mut settings =
-                state.core.applet.get_popup_settings(parent, new_id, None, None, None);
+            let mut settings = state
+                .core
+                .applet
+                .get_popup_settings(parent, new_id, None, None, None);
             settings.grab = true;
             settings.positioner.size_limits = Limits::NONE
                 .max_width(1640.0)

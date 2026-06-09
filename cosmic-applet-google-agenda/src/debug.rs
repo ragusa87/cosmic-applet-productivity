@@ -137,11 +137,7 @@ async fn run_async() -> Result<()> {
         let until = if delta <= 0 {
             "in progress (now)".to_owned()
         } else {
-            format!(
-                "in {}m{}s",
-                delta.div_euclid(60),
-                delta.rem_euclid(60)
-            )
+            format!("in {}m{}s", delta.div_euclid(60), delta.rem_euclid(60))
         };
         println!("Next visible event: {} — starts {}", ev.summary, until);
         let lead = i64::from(config.notification_lead_secs);
@@ -152,9 +148,7 @@ async fn run_async() -> Result<()> {
         } else if delta < 0 {
             println!("No notification — event already started.");
         } else if delta <= lead {
-            println!(
-                "Notification would fire NOW (event is within lead window of {lead}s)."
-            );
+            println!("Notification would fire NOW (event is within lead window of {lead}s).");
         } else {
             println!(
                 "Notification would fire in {}s (lead = {lead}s).",
@@ -185,10 +179,7 @@ fn print_item(index: usize, item: &DebugItem) {
             .as_deref()
             .map(|r| format!(" (self: {r})"))
             .unwrap_or_default();
-        println!(
-            "    attendees:    {}{}",
-            item.attendee_count, self_part
-        );
+        println!("    attendees:    {}{}", item.attendee_count, self_part);
     }
     if let Some(m) = &item.meet_url {
         println!("    meet:         {m}");

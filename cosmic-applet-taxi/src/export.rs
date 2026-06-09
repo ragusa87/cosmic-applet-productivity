@@ -2,9 +2,7 @@ use chrono::{Local, NaiveDate};
 use cosmic::Element;
 use cosmic::app::Task;
 use cosmic::iced::{self, Alignment, Length, Size};
-use cosmic::widget::{
-    Column, Row, button, container, scrollable, text, text_editor, text_input,
-};
+use cosmic::widget::{Column, Row, button, container, scrollable, text, text_editor, text_input};
 use cosmic_config::CosmicConfigEntry;
 
 use crate::app::build_block_lines;
@@ -128,9 +126,10 @@ impl cosmic::Application for ExportApp {
         };
         app.regenerate_preview();
 
-        let detect = cosmic::task::future(async move {
-            Msg::TaxiDetected(TaxiRunner::detect(&config).await)
-        });
+        let detect =
+            cosmic::task::future(
+                async move { Msg::TaxiDetected(TaxiRunner::detect(&config).await) },
+            );
         (app, detect)
     }
 
@@ -231,8 +230,9 @@ impl cosmic::Application for ExportApp {
             .push(reset_preview_btn);
 
         // Action buttons
-        let can_write =
-            self.taxirc.is_some() && parsed_date.is_some() && !self.preview_content.text().trim().is_empty();
+        let can_write = self.taxirc.is_some()
+            && parsed_date.is_some()
+            && !self.preview_content.text().trim().is_empty();
         let mut export_btn = button::suggested("Export");
         if can_write && !self.busy {
             export_btn = export_btn.on_press(Msg::Export);
@@ -366,7 +366,11 @@ impl cosmic::Application for ExportApp {
                 signal_applet_refresh();
                 let runner = self.taxi_runner.clone();
                 return cosmic::task::future(async move {
-                    let r = runner.run(&["ci"]).await.map_err(|e| e.to_string()).map(|_| ());
+                    let r = runner
+                        .run(&["ci"])
+                        .await
+                        .map_err(|e| e.to_string())
+                        .map(|_| ());
                     Msg::PushDone(r)
                 });
             }
@@ -537,22 +541,16 @@ impl ExportApp {
         let text = self.preview_content.text();
         let body_lines: Vec<String> = text
             .lines()
-            .filter(|l| {
-                NaiveDate::parse_from_str(l.trim(), date_format).ok() != Some(date)
-            })
+            .filter(|l| NaiveDate::parse_from_str(l.trim(), date_format).ok() != Some(date))
             .map(str::to_owned)
             .collect();
 
-        let has_real_entry = body_lines
-            .iter()
-            .any(|l| {
-                let t = l.trim();
-                !t.is_empty() && !t.starts_with('#')
-            });
+        let has_real_entry = body_lines.iter().any(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with('#')
+        });
         if !has_real_entry {
-            tracing::info!(
-                "manual export skipped: no entries to write for {date}"
-            );
+            tracing::info!("manual export skipped: no entries to write for {date}");
             return Ok(());
         }
 

@@ -2,8 +2,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
-const EVENTS_URL: &str =
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const EVENTS_URL: &str = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
