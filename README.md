@@ -1,14 +1,16 @@
-# cosmic-applet for productivity (google+taxi)
+# cosmic-applet for productivity (google+taxi+slack)
 
-Three COSMIC desktop panel applets — two that surface bits of your Google
+Four COSMIC desktop panel applets — two that surface bits of your Google
 account, one that tracks time and exports to a [taxi](https://github.com/sephii/taxi)
-timesheet:
+timesheet, and one that mirrors the Slack tray-icon unread count by reading
+its DBus tooltip:
 
 | Applet | Binary | What it shows | Icon |
 |---|---|---|---|
 | [Gmail Unread](#gmail-applet) | `cosmic-applet-gmail` | Number of unread Gmail messages, refreshed periodically. |![gmail-preview.png](cosmic-applet-gmail/gmail-preview.png)|
 | [Next meeting](#google-agenda-applet) | `cosmic-applet-google-agenda` | Next Google Calendar event with a live countdown, plus a desktop notification a few minutes before it starts. |![calendar-preview.png](cosmic-applet-google-agenda/calendar-preview.png)|
 | [Taxi tracker](#taxi-tracker-applet) | `cosmic-applet-taxi` | Multi-timer time tracking with daily auto-export to `taxi` (e.g. Liip's Zebra). | |
+| [Slack Unread](#slack-applet) | `cosmic-applet-slack` | Badge mirroring Slack's tray-icon ToolTip — pulled over DBus, no Slack API, no token. | |
 
 The two Google-backed applets follow the same model:
 
@@ -29,6 +31,12 @@ The third applet, `cosmic-applet-taxi`, is unrelated to Google — it tracks
 local time and pushes merged + rounded sessions to your `~/zebra/%Y/%m.tks`
 timesheet via the `taxi` CLI (invoked through `uv run`).
 
+The fourth applet, `cosmic-applet-slack`, is also unrelated to Google — it
+queries the session bus for Slack's `StatusNotifierItem` and parses the
+unread count out of the tooltip text. No OAuth, no Slack API, no token; it
+just mirrors whatever Slack already publishes to the desktop's tray
+protocol.
+
 ## Build & install
 
 Requires Rust 1.85+ (for `edition = "2024"`), `just`, and a working Wayland
@@ -37,26 +45,30 @@ it must be running for either applet to remember credentials.
 
 ```sh
 just build-release
-just install-user        # installs both applets into ~/.local; use `sudo just install` for /usr
+just install-user        # installs all four applets into ~/.local; use `sudo just install` for /usr
 ```
 
 `just install-user` lays each applet's binary, desktop entry, and icon into:
 
-- `~/.local/bin/cosmic-applet-{gmail,google-agenda,taxi}`
-- `~/.local/share/applications/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi}.desktop`
-- `~/.local/share/icons/hicolor/scalable/apps/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi}.svg`
+- `~/.local/bin/cosmic-applet-{gmail,google-agenda,taxi,slack}`
+- `~/.local/share/applications/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi,Slack}.desktop`
+- `~/.local/share/icons/hicolor/scalable/apps/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi,Slack}.svg`
 
 > ⚠️ `~/.local/bin` must be on your `$PATH` — the panel runs the binary by
-> name (`Exec=cosmic-applet-gmail` / `Exec=cosmic-applet-google-agenda`)
-> and resolves it via `PATH`. Most distros add it automatically; check with
+> name (`Exec=cosmic-applet-gmail` etc.) and resolves it via `PATH`. Most
+> distros add it automatically; check with
 > `echo $PATH | tr ':' '\n' | grep .local/bin`.
 
-If you only want one of the two:
+If you only want one applet:
 
 ```sh
 cargo build --release -p cosmic-applet-gmail
 # or
 cargo build --release -p cosmic-applet-google-agenda
+# or
+cargo build --release -p cosmic-applet-taxi
+# or
+cargo build --release -p cosmic-applet-slack
 ```
 
 ### Add an applet to the panel
@@ -68,8 +80,8 @@ installed:
 
 1. **Settings → Desktop → Panel** (or right-click the panel → *Configure*).
 2. Scroll to **Applets** → **Add Applet**.
-3. Pick **Gmail Unread** and/or **Next meeting** from the list and drag it
-   into Left, Center, or Right.
+3. Pick **Gmail Unread**, **Next meeting**, **Taxi tracker**, and/or
+   **Slack Unread** from the list and drag it into Left, Center, or Right.
 
 If the entry does not appear in the Add-Applet list, the panel has cached
 its applet index. Force a re-scan with one of:
@@ -88,7 +100,7 @@ below, and right-click the new panel icon → **Credentials** to authorize.
 just uninstall-user       # or `sudo just uninstall` for /usr
 ```
 
-Removes the binary, desktop entry, and icon for **both** applets.
+Removes the binary, desktop entry, and icon for **all four** applets.
 
 ## One-time Google Cloud setup
 
@@ -147,9 +159,10 @@ Each applet polls on its own cadence. To trigger an immediate refresh:
 pkill -USR2 -f cosmic-applet-gmail            # poll Gmail right now
 pkill -USR2 -f cosmic-applet-google-agenda    # refetch calendar right now
 pkill -USR2 -f cosmic-applet-taxi             # reload taxi state right now
+pkill -USR2 -f cosmic-applet-slack            # re-read Slack tooltip right now
 ```
 
-Or, to signal all three at once:
+Or, to signal all four at once:
 
 ```sh
 just refresh
@@ -157,9 +170,11 @@ just refresh
 
 On receiving SIGUSR2, the Google applets reload the OAuth tokens from
 Secret Service and fetch right away; the taxi applet reloads its state
-file and re-detects `uv`. The settings windows (running under the same
-binary names) ignore SIGUSR2, so sending the signal to all processes with
-that name is safe — only the panel applet acts on it.
+file and re-detects `uv`; the Slack applet wakes the DBus discovery loop
+and re-reads the StatusNotifierItem tooltip. The settings windows
+(running under the same binary names) ignore SIGUSR2, so sending the
+signal to all processes with that name is safe — only the panel applet
+acts on it.
 
 ### Pre-filling credentials from the environment
 
@@ -328,6 +343,75 @@ cosmic-applet-taxi --show-settings
 cosmic-applet-taxi --show-export
 ```
 
+## Slack applet
+
+Mirrors Slack's own tray-icon unread state. **No Slack API, no token, no
+OAuth** — Slack already publishes a `StatusNotifierItem` on your session
+bus with a tooltip like `"You have 3 notifications"`; the applet reads
+that tooltip and renders the badge.
+
+**Discovery** — Slack registers three sibling connections on the bus
+(typically `:1.854`, `:1.855`, `:1.856`); only one of them serves
+`/StatusNotifierItem`. The applet:
+
+1. Enumerates session-bus names.
+2. Filters to connections whose `/proc/<pid>/comm` is `slack`.
+3. Among those, picks the one whose `/StatusNotifierItem` exposes a
+   readable `ToolTip` property (with a 500 ms timeout per probe so a
+   flaky sibling can't stall the panel).
+4. Subscribes to that item's `NewToolTip` signal for instant updates
+   and watches `NameOwnerChanged` on the bus to detect Slack
+   quitting/restarting. A 2 s rescan when Slack is down and a 5 s
+   safety re-read while running cover the cases where the signal
+   path stays silent.
+
+**Badge states** — the tooltip text is parsed into three possible states:
+
+| Tooltip text                 | Badge                       |
+|------------------------------|-----------------------------|
+| `You have 3 notifications`   | `3`                         |
+| `You have unread messages`   | `•` (dot — count unknown)   |
+| `No unread messages`         | (hidden)                    |
+| Slack not running            | (hidden, applet icon only)  |
+
+Parsing: first `\d+` match in `title + " " + description` wins (if > 0).
+Otherwise a case-insensitive substring check: `"no unread"` /
+`"no notification"` → no badge; `"unread"` / `"notification"` → dot
+indicator; nothing else matches → no badge.
+
+**Interactions:**
+
+- **Left-click** runs `xdg-open slack:` (Slack registers this URL
+  scheme handler on install — typically focuses the existing window).
+- **Right-click** opens a one-item menu with **Refresh** (same effect
+  as `pkill -USR2 -f cosmic-applet-slack`).
+
+**Debugging what the panel sees** — run with `--debug` to print the
+full fetch pipeline once and exit:
+
+```sh
+cosmic-applet-slack --debug
+```
+
+Output walks each Slack-owned bus name, shows whether `/StatusNotifierItem`
+is reachable, prints the raw `ToolTip` tuple (`icon_name`, `icon_count`,
+`title`, `description`), the step-by-step parse (digit match, then
+keyword fallbacks), and which connection would be chosen. Useful when
+Slack changes its tooltip wording in an update — you can see the exact
+string and adjust the parser.
+
+For continuous live logging, run the panel applet with
+`RUST_LOG=cosmic_applet_slack=debug`: every fetch emits a `tracing`
+event with the title, description, and parsed `Unread` variant.
+
+**Configuration** — none. The applet hardcodes the `slack` process
+name. If you need to support a different process name (Snap, Flatpak,
+forks), edit `SLACK_PROCESS` in `cosmic-applet-slack/src/slack.rs`.
+
+**Requirements** — Slack desktop ≥ recent enough to register a tray
+icon via `org.kde.StatusNotifierItem` (standard for years). Wayland +
+COSMIC panel as usual. Nothing else.
+
 ## Troubleshooting
 
 - **Gmail panel shows `—` forever** → the applet has no credentials;
@@ -340,6 +424,13 @@ cosmic-applet-taxi --show-export
   (right-click → Credentials) or no upcoming event in the next 24h.
 - **`Secret Service unavailable`** → no keyring daemon is running.
   Install / start `gnome-keyring-daemon` (it ships with COSMIC by default).
+- **Slack badge stays hidden even though Slack is running** → run
+  `cosmic-applet-slack --debug` to see whether a `/StatusNotifierItem`
+  was found and what the tooltip text is. If three connections show up
+  but all skip, Slack may not be exposing its tray icon (toggle
+  *Preferences → Notifications → Show a badge* inside Slack). If the
+  tooltip wording isn't recognised, adjust the keyword check in
+  `cosmic-applet-slack/src/slack.rs::parse_unread`.
 - **Refresh token expired after a week** → on Google's OAuth consent
   screen in "Testing" mode, refresh tokens expire after 7 days. Either
   re-authorize once a week, or move the app to "In production" (still no
@@ -354,11 +445,12 @@ cosmic-applet-taxi --show-export
 ```
 cosmic-applet-google/
 ├── Cargo.toml                       # workspace root
-├── justfile                         # build/install/uninstall for all three applets
+├── justfile                         # build/install/uninstall for all four applets
 ├── cosmic-google-common/            # shared OAuth2 + Secret Service helpers (gmail + agenda)
 ├── cosmic-applet-gmail/             # Gmail Unread applet
 ├── cosmic-applet-google-agenda/     # Next meeting applet
-└── cosmic-applet-taxi/              # Time tracker + taxi/Zebra exporter
+├── cosmic-applet-taxi/              # Time tracker + taxi/Zebra exporter
+└── cosmic-applet-slack/             # Slack unread badge via DBus tray ToolTip
 ```
 
 ## License

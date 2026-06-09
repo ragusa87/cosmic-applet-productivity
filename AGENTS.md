@@ -5,9 +5,10 @@ user-facing doc; this file is the *contributor*-facing one.
 
 ## What this is
 
-A Cargo workspace bundling three COSMIC desktop panel applets — two share
+A Cargo workspace bundling four COSMIC desktop panel applets — two share
 OAuth + Secret Service plumbing for Google APIs, the third is a standalone
-time tracker:
+time tracker, the fourth is a read-only DBus reflector for Slack's tray
+icon:
 
 - **`cosmic-applet-gmail`** — Gmail unread count, polls every N seconds.
 - **`cosmic-applet-google-agenda`** — Next Google Calendar event with a live
@@ -16,11 +17,17 @@ time tracker:
   to a [taxi](https://github.com/sephii/taxi) timesheet (`~/zebra/%Y/%m.tks`).
   No OAuth, no Google. Reads `~/.config/taxi/taxirc` directly, shells out
   to `taxi` via `uv run` for alias listing and updates.
+- **`cosmic-applet-slack`** — Slack unread badge. **No HTTP at all.** Walks
+  the session bus for Slack's `StatusNotifierItem`, parses the integer out
+  of the `ToolTip` property's title text, subscribes to `NewToolTip` +
+  `NameOwnerChanged` for instant updates. No OAuth, no Google, no token,
+  no config.
 - **`cosmic-google-common`** — shared library crate (gmail + agenda only)
   exporting the OAuth2 PKCE flow (`auth`) and the keyring-backed token
-  store (`secrets`). The taxi applet does not depend on this crate.
+  store (`secrets`). The taxi and slack applets do not depend on this
+  crate.
 
-All three applets are written in Rust on libcosmic / iced and follow the
+All four applets are written in Rust on libcosmic / iced and follow the
 "one binary, multiple modes" shape; see
 [Two modes, not two binaries](#two-modes-not-two-binaries) below.
 
@@ -29,7 +36,7 @@ All three applets are written in Rust on libcosmic / iced and follow the
 ```
 cosmic-applet-google/
 ├── Cargo.toml                         # workspace root + workspace.dependencies
-├── justfile                           # build/install/uninstall both applets
+├── justfile                           # build/install/uninstall all four applets
 ├── rust-toolchain.toml                # channel = stable
 ├── LICENSE.md                         # GPL-3.0-or-later + icon attribution
 │
@@ -54,11 +61,16 @@ cosmic-applet-google/
 │   └── src/                           # main / app / settings / ui / config /
 │                                      # calendar / debug
 │
-└── cosmic-applet-taxi/                # Taxi tracker applet (see below)
-    ├── Cargo.toml                     # NO dep on cosmic-google-common
-    ├── data/                          # .desktop + icon
-    └── src/                           # main / app / settings / export / ui /
-                                       # config / state / sessions / taxi / lock
+├── cosmic-applet-taxi/                # Taxi tracker applet (see below)
+│   ├── Cargo.toml                     # NO dep on cosmic-google-common
+│   ├── data/                          # .desktop + icon
+│   └── src/                           # main / app / settings / export / ui /
+│                                      # config / state / sessions / taxi / lock
+│
+└── cosmic-applet-slack/               # Slack unread badge (see below)
+    ├── Cargo.toml                     # NO dep on cosmic-google-common, no HTTP client
+    ├── data/                          # .desktop + icon (downloaded from svgrepo)
+    └── src/                           # main / app / ui / slack / debug
 ```
 
 ## Two modes, not two binaries
@@ -70,12 +82,15 @@ sub-surface embedded in the panel. Real toplevels with WM chrome require
 process, but a single binary can dispatch to either based on `argv` — which
 saves maintaining two installs and two `.desktop` files per applet.
 
-All three applets do this:
+All four applets do this:
 
 | Mode | Entry | Surface | Trigger |
 |---|---|---|---|
 | Panel applet | `cosmic::applet::run::<AppModel>(())` | transparent sub-surface | default — no flag |
 | Settings window | `cosmic::app::run::<SettingsApp>(...)` | regular xdg_toplevel | `--show-settings` |
+
+(The Slack applet has no settings — nothing to configure — so it only
+implements the panel mode and the `--debug` CLI mode below.)
 
 The agenda binary adds two extra `argv`-selected modes (no iced involved):
 
@@ -90,8 +105,15 @@ The taxi binary adds one extra mode:
 |---|---|---|---|
 | Export dialog | `export::run()` (`cosmic::app::run`) | regular xdg_toplevel | `--show-export` |
 
+The slack binary adds one extra mode:
+
+| Mode | Entry | Surface | Trigger |
+|---|---|---|---|
+| CLI debug dump | `debug::run()` (tokio **multi-thread** runtime — zbus needs the reactor on a separate thread or the property reads hang) | stdout only | `--debug` |
+
 The applet's right-click menu → **Credentials…** spawns `current_exe()` with
-`--show-settings`, which is how the user reaches the OAuth setup.
+`--show-settings`, which is how the user reaches the OAuth setup. The Slack
+applet's right-click menu has only a **Refresh** entry.
 
 ## Shared OAuth + Secrets crate
 
@@ -111,12 +133,17 @@ Add a new Google-backed applet later: depend on `cosmic-google-common`,
 declare a per-applet `const SCOPE` and `const SUCCESS_HTML`, and reuse the
 same OAuth flow.
 
-## Storage split (both applets)
+## Storage split (gmail + agenda only)
 
 | Item | Where |
 |---|---|
 | `email`, `client_id`, intervals/toggles | cosmic-config (RON in `~/.config/{APP_ID}/v1/`), watched live |
 | `client_secret`, `refresh_token`, `access_token`, `expires_at_unix` | Secret Service via `keyring` v3, one JSON blob keyed by `email` |
+
+The taxi applet uses cosmic-config for small scalars plus
+`~/.local/state/cosmic-applet-taxi/state.json` for the timers/sessions
+vector. The slack applet stores **nothing** — its only "state" is what
+Slack publishes on DBus at any given moment.
 
 Cross-binary propagation: the settings binary writes both. The applet's
 `watch_config::<Config>` subscription delivers `Message::UpdateConfig` when
@@ -125,8 +152,13 @@ triggers an immediate refetch. No IPC.
 
 ## SIGUSR2 → force refresh
 
-Both applets listen for SIGUSR2 (subscription in `src/app.rs::sigusr2_stream`,
-built on `tokio::signal::unix`). On receipt → reload tokens → fetch.
+All four applets listen for SIGUSR2 (subscription in
+`src/app.rs::sigusr2_stream`, built on `tokio::signal::unix`). On receipt:
+
+- **gmail / agenda** → reload tokens from Secret Service → immediate fetch.
+- **taxi** → reload `state.json` from disk → re-detect `uv` availability.
+- **slack** → wake `slack::REFRESH_NOTIFY` (process-wide `LazyLock<Notify>`)
+  → the DBus subscription's inner `select!` re-reads the `ToolTip` property.
 
 The settings mode installs `SIG_IGN` for SIGUSR2 at startup so
 `pkill -USR2 cosmic-applet-…` (which would match both modes' processes by
@@ -547,15 +579,117 @@ description seen in those files. Runs on startup (after `Taxirc` loads)
 and after every auto-export. Deleting a timer adds its alias to
 `suppressed_aliases` so seeding doesn't bring it back.
 
+### cosmic-applet-slack
+
+- **APP_ID**: `com.github.ragusa87.CosmicAppletSlack`
+- **No keyring entry, no config, no `cosmic-google-common`, no HTTP client.**
+  The only persistent state is whatever Slack itself publishes to DBus.
+- **Discovery target**: a `:1.x` connection on the session bus whose
+  `/proc/<pid>/comm` is `slack` *and* whose `/StatusNotifierItem` object
+  serves a readable `ToolTip` property. Slack registers three sibling
+  connections; only one of them carries the SNI.
+- **Tooltip parsing** (`src/slack.rs::parse_unread`): concatenate `title`
+  + `" "` + `description`, then
+  1. first `\d+` match → if `> 0`, return `Unread::Count(n)`;
+  2. otherwise if the lowercased haystack contains `"no unread"` /
+     `"no notification"` → `Unread::None`;
+  3. otherwise if it contains `"unread"` / `"notification"` →
+     `Unread::Indicator` (rendered as a `•` dot badge);
+  4. else `Unread::None`.
+
+  The "no" cases must be checked **before** the bare-keyword cases —
+  otherwise `"No unread messages"` would parse as `Indicator`.
+- **Subscription topology** (`src/slack.rs::stream`): one mpsc-backed
+  iced `Subscription` emits `SlackEvent::{Unread(Unread), Gone}`. The
+  task runs an outer loop that calls `find_slack_service`; when found,
+  builds the SNI proxy and runs an inner `tokio::select!` over four
+  branches:
+  - `proxy.receive_new_tool_tip().next()` → re-read tooltip, emit
+    `Unread(...)`.
+  - `dbus.receive_name_owner_changed().next()` filtered to our chosen
+    name with empty `new_owner` → Slack quit, emit `Gone`, restart
+    outer loop.
+  - `tokio::time::sleep(RESCAN_OK_INTERVAL)` (5 s) → safety re-read.
+  - `REFRESH_NOTIFY.notified()` (a process-wide `LazyLock<Notify>`) →
+    woken by `Message::ForceRefresh` from SIGUSR2 or the right-click
+    Refresh menu → re-read tooltip immediately.
+
+  When Slack isn't on the bus the outer loop sleeps
+  `RESCAN_GONE_INTERVAL` (2 s) or until `REFRESH_NOTIFY` wakes it,
+  whichever first.
+- **Timeouts everywhere a sibling could hang**: both `find_slack_service`
+  and `debug_scan` wrap `proxy.tool_tip()` in
+  `tokio::time::timeout(Duration::from_millis(500), ...)`. Slack's third
+  sibling connection accepts the `/StatusNotifierItem` path but never
+  replies to the property read — without the timeout the discovery
+  loop would deadlock on that single bus name.
+- **PID lookups must be parallel**: in `debug_scan`, each
+  `GetConnectionUnixProcessID` round-trip on zbus 5 with the tokio
+  backend is in the ~5–10 ms range, but 120+ sequential calls add up
+  to many seconds. `futures_util::future::join_all` over a
+  `Vec<async move { ... }>` keeps the whole scan under a second. The
+  production `find_slack_service` is still sequential because it
+  short-circuits on the first hit.
+- **The zbus `name = "..."` quirk**: `#[zbus::proxy]` PascalCases the
+  Rust method `get_connection_unix_process_id` as
+  `GetConnectionUnixProcessId` (lowercase `d`). The actual DBus method
+  is `GetConnectionUnixProcessID` (all-caps `ID`), so the proxy
+  declaration **must** carry `#[zbus(name = "GetConnectionUnixProcessID")]`
+  or every call returns `UnknownMethod`. Other methods on this trait
+  (`ListNames`, `NameOwnerChanged`) round-trip cleanly through the
+  default conversion.
+- **Process-name match**: `/proc/<pid>/comm` is truncated to 15 bytes,
+  so the literal `SLACK_PROCESS = "slack"` (5 bytes) matches cleanly.
+  If you ever rename the binary or someone packages Slack with a
+  longer process name, lift the constant.
+- **Badge rendering** (`src/app.rs::view`): the badge is only shown
+  when `slack_running == true` *and* `unread != Unread::None`. The
+  three states map to:
+  - `Unread::None` → no badge.
+  - `Unread::Indicator` → pill with `"•"`.
+  - `Unread::Count(n)` → pill with `n.to_string()`.
+
+  Color is Slack purple (`Color::from_rgb(0.29, 0.07, 0.34)`); pill
+  geometry is copied verbatim from the Gmail applet's badge.
+- **Left-click**: `xdg-open slack:` (Slack registers this URL scheme
+  on install). No SNI `Activate()` call — that would require holding
+  the proxy across the `Subscription` boundary, which iced makes
+  awkward; `xdg-open` is good enough and works for both "launch
+  Slack" and "focus existing Slack window".
+- **Files**:
+
+```
+src/
+├── main.rs         argv → applet::run or debug::run (--debug).
+│                   No --show-settings (nothing to configure).
+├── app.rs          panel applet — Application impl, panel button view,
+│                   badge rendering, right-click Refresh menu popup,
+│                   subscription wiring (slack::stream + SIGUSR2),
+│                   Message::ForceRefresh wakes slack::REFRESH_NOTIFY.
+├── ui.rs           one-item right-click menu (Refresh).
+├── slack.rs        DBusProxy + StatusNotifierItemProxy (#[zbus::proxy]),
+│                   find_slack_service, stream() with select! over
+│                   NewToolTip / NameOwnerChanged / sleep / REFRESH_NOTIFY,
+│                   parse_unread (with unit-test-shaped logic), debug_scan
+│                   returning DebugReport for --debug, REFRESH_NOTIFY
+│                   (LazyLock<Notify>).
+└── debug.rs        --debug CLI — spins a tokio MULTI-thread runtime
+                    (zbus hangs on current-thread when reading
+                    properties), calls slack::debug_scan(), prints
+                    each candidate's PID/comm/tooltip/parse step.
+                    No GUI.
+```
+
 ## Build / run / test commands
 
 ```sh
 just check                   # cargo clippy --workspace --all-features
-just build-release           # cargo build --release (all three binaries)
+just build-release           # cargo build --release (all four binaries)
 just install-user            # ~/.local/{bin,share/applications,share/icons/...}
 just run-gmail               # cargo run -p cosmic-applet-gmail (panel, headless)
 just run-agenda              # cargo run -p cosmic-applet-google-agenda
 just run-taxi                # cargo run -p cosmic-applet-taxi
+just run-slack               # cargo run -p cosmic-applet-slack
 cargo test --workspace       # state/sessions/taxi/gmail/agenda unit tests
 ```
 
@@ -563,19 +697,26 @@ There is **no automated UI test** — a real COSMIC session is required. After
 changes to `view()`, panel layout, or popup logic, install + `pkill
 cosmic-applet-…` and the panel respawns it. Then:
 
-- Right-click → menu shows "Credentials…" (gmail/agenda) or opens the
-  popup (taxi — there's no menu entry; right-click is wired to the same
-  popup-toggle as left-click).
+- Right-click → menu shows "Credentials…" (gmail/agenda), "Refresh"
+  (slack), or opens the popup (taxi — there's no menu entry; right-click
+  is wired to the same popup-toggle as left-click).
 - Left-click — gmail opens mail.google.com; agenda opens Meet link of next
-  event (fallback `calendar.google.com`); taxi toggles the popup.
+  event (fallback `calendar.google.com`); taxi toggles the popup; slack
+  runs `xdg-open slack:`.
 - `pkill -USR2 cosmic-applet-…` → immediate refresh (gmail/agenda reload
-  tokens + fetch; taxi reloads `state.json` + re-detects `uv`).
+  tokens + fetch; taxi reloads `state.json` + re-detects `uv`; slack
+  wakes `REFRESH_NOTIFY` and re-reads the tooltip).
 - `cosmic-applet-… --show-settings` from a terminal → settings window
-  (useful for UI iteration without rebuilding the panel)
+  (useful for UI iteration without rebuilding the panel). Slack has no
+  settings.
 - agenda only: `cosmic-applet-google-agenda --debug` → dumps the raw event
   classification, no GUI
 - taxi only: `cosmic-applet-taxi --show-export` → opens the per-date
   export dialog as a toplevel window
+- slack only: `cosmic-applet-slack --debug` → walks the session bus,
+  prints each Slack-owned connection's PID/comm/tooltip/parse-decision,
+  no GUI. `RUST_LOG=cosmic_applet_slack=debug just run-slack` streams
+  per-fetch parse logging at runtime.
 
 ## Conventions (applies to all crates)
 
@@ -651,7 +792,20 @@ cosmic-applet-…` and the panel respawns it. Then:
 - Don't extract a third shared crate "just in case." `cosmic-google-common`
   exists because two applets word-for-word duplicated 250+ LOC of OAuth/
   keyring code; do the same only when a third applet starts duplicating
-  something else. The taxi applet shares nothing with the Google pair, so
-  it depends on neither.
+  something else. The taxi and slack applets share nothing with the Google
+  pair, so they depend on neither.
 - Don't add OAuth or Google API code to `cosmic-applet-taxi`; it's a
   deliberately offline-only tracker that talks to `taxi` via uv.
+- Don't add an HTTP client, OAuth, or any Slack API integration to
+  `cosmic-applet-slack`. The whole point is that it reads what Slack
+  already publishes on the local session bus — no token, no rate
+  limit, no scope to argue with. If a feature requires Slack's web API,
+  it belongs in a *different* applet.
+- Don't drop the 500 ms timeout around `proxy.tool_tip()` in
+  `cosmic-applet-slack`. Slack's third sibling connection on the bus
+  accepts the `/StatusNotifierItem` path but never replies to the
+  property read; removing the timeout deadlocks discovery on that
+  bus name forever.
+- Don't make the Slack `--debug` CLI use a `current_thread` tokio
+  runtime. zbus 5's tokio backend needs the reactor on a separate
+  thread or property reads hang under it. Keep `new_multi_thread()`.

@@ -13,6 +13,8 @@ agenda-name := 'cosmic-applet-google-agenda'
 agenda-appid := 'com.github.ragusa87.CosmicAppletGoogleAgenda'
 taxi-name := 'cosmic-applet-taxi'
 taxi-appid := 'com.github.ragusa87.CosmicAppletTaxi'
+slack-name := 'cosmic-applet-slack'
+slack-appid := 'com.github.ragusa87.CosmicAppletSlack'
 
 default: build-release
 
@@ -46,6 +48,7 @@ _appid-of crate:
         cosmic-applet-gmail)         echo "{{gmail-appid}}" ;; \
         cosmic-applet-google-agenda) echo "{{agenda-appid}}" ;; \
         cosmic-applet-taxi)          echo "{{taxi-appid}}" ;; \
+        cosmic-applet-slack)         echo "{{slack-appid}}" ;; \
         *) echo "unknown crate: {{crate}}" >&2; exit 1 ;; \
     esac
 
@@ -61,10 +64,14 @@ run-agenda *args:
 run-taxi *args:
     env RUST_BACKTRACE=full cargo run --release -p cosmic-applet-taxi {{args}}
 
+run-slack *args:
+    env RUST_BACKTRACE=full cargo run --release -p cosmic-applet-slack {{args}}
+
 refresh:
     -pkill -USR2 -f cosmic-applet-gmail            # poll Gmail right now
     -pkill -USR2 -f cosmic-applet-google-agenda    # refetch calendar right now
     -pkill -USR2 -f cosmic-applet-taxi             # reload taxi state right now
+    -pkill -USR2 -f cosmic-applet-slack            # re-read Slack tooltip right now
 
 # Fast-build a single applet, user-install it, then restart cosmic-panel so it
 # picks up the new binary. Example: `just debug-run cosmic-applet-taxi`.
@@ -74,22 +81,26 @@ debug-run crate *args: (install-fast crate args)
 install: \
     (_install-system gmail-name gmail-appid) \
     (_install-system agenda-name agenda-appid) \
-    (_install-system taxi-name taxi-appid)
+    (_install-system taxi-name taxi-appid) \
+    (_install-system slack-name slack-appid)
 
 install-user: \
     (_install-user gmail-name gmail-appid) \
     (_install-user agenda-name agenda-appid) \
-    (_install-user taxi-name taxi-appid)
+    (_install-user taxi-name taxi-appid) \
+    (_install-user slack-name slack-appid)
 
 uninstall: \
     (_uninstall-system gmail-name gmail-appid) \
     (_uninstall-system agenda-name agenda-appid) \
-    (_uninstall-system taxi-name taxi-appid)
+    (_uninstall-system taxi-name taxi-appid) \
+    (_uninstall-system slack-name slack-appid)
 
 uninstall-user: \
     (_uninstall-user gmail-name gmail-appid) \
     (_uninstall-user agenda-name agenda-appid) \
-    (_uninstall-user taxi-name taxi-appid)
+    (_uninstall-user taxi-name taxi-appid) \
+    (_uninstall-user slack-name slack-appid)
 
 _install-system name appid:
     install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{ base-dir / 'bin' / name }}
