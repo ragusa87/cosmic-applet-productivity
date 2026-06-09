@@ -63,7 +63,10 @@ trait DBus {
     ) -> zbus::Result<()>;
 }
 
-#[proxy(interface = "org.kde.StatusNotifierItem", default_path = "/StatusNotifierItem")]
+#[proxy(
+    interface = "org.kde.StatusNotifierItem",
+    default_path = "/StatusNotifierItem"
+)]
 trait StatusNotifierItem {
     #[zbus(property)]
     fn tool_tip(&self) -> zbus::Result<ToolTip>;
@@ -298,14 +301,16 @@ pub(crate) async fn debug_scan() -> anyhow::Result<DebugReport> {
     let names = dbus.list_names().await?;
     let total_names = names.len();
 
-    let connection_names_vec: Vec<&String> =
-        names.iter().filter(|n| n.starts_with(':')).collect();
+    let connection_names_vec: Vec<&String> = names.iter().filter(|n| n.starts_with(':')).collect();
     let connection_names = connection_names_vec.len();
 
     let pid_lookups = connection_names_vec.iter().map(|name| {
         let dbus = &dbus;
         async move {
-            let pid = dbus.get_connection_unix_process_id(name.as_str()).await.ok()?;
+            let pid = dbus
+                .get_connection_unix_process_id(name.as_str())
+                .await
+                .ok()?;
             Some(((*name).clone(), pid))
         }
     });
@@ -324,22 +329,19 @@ pub(crate) async fn debug_scan() -> anyhow::Result<DebugReport> {
     let mut chosen: Option<String> = None;
     for (name, pid, comm) in slack_pids {
         let (tooltip, parsed) = match build_sni_proxy(&conn, &name).await {
-            Ok(proxy) => match tokio::time::timeout(
-                Duration::from_millis(500),
-                proxy.tool_tip(),
-            )
-            .await
-            {
-                Ok(Ok(t)) => {
-                    let parsed = parse_unread(&t);
-                    if chosen.is_none() {
-                        chosen = Some(name.clone());
+            Ok(proxy) => {
+                match tokio::time::timeout(Duration::from_millis(500), proxy.tool_tip()).await {
+                    Ok(Ok(t)) => {
+                        let parsed = parse_unread(&t);
+                        if chosen.is_none() {
+                            chosen = Some(name.clone());
+                        }
+                        (Ok(t), Some(parsed))
                     }
-                    (Ok(t), Some(parsed))
+                    Ok(Err(e)) => (Err(e.to_string()), None),
+                    Err(_) => (Err("timed out reading ToolTip property".to_owned()), None),
                 }
-                Ok(Err(e)) => (Err(e.to_string()), None),
-                Err(_) => (Err("timed out reading ToolTip property".to_owned()), None),
-            },
+            }
             Err(e) => (Err(e.to_string()), None),
         };
         slack_candidates.push(DebugCandidate {

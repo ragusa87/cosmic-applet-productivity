@@ -121,7 +121,9 @@ pub async fn start_oauth_flow(
 
     let refresh = token
         .refresh_token()
-        .ok_or_else(|| anyhow!("Google did not return a refresh_token (re-run with prompt=consent)"))?
+        .ok_or_else(|| {
+            anyhow!("Google did not return a refresh_token (re-run with prompt=consent)")
+        })?
         .secret()
         .clone();
 
@@ -163,10 +165,16 @@ async fn wait_for_redirect(
     let (mut stream, _) = listener.accept().await.context("accept redirect")?;
 
     let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).await.context("read redirect request")?;
+    let n = stream
+        .read(&mut buf)
+        .await
+        .context("read redirect request")?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
-    let first_line = request.lines().next().ok_or_else(|| anyhow!("empty request"))?;
+    let first_line = request
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow!("empty request"))?;
     let path = first_line
         .split_whitespace()
         .nth(1)

@@ -38,8 +38,8 @@ impl Taxirc {
 }
 
 pub fn load_taxirc(path: &Path) -> Result<Taxirc> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     parse_taxirc(&content)
 }
 
@@ -107,8 +107,8 @@ pub struct TksDay {
 /// Parse a taxi .tks file. Tolerant: lines that look like neither a date
 /// header nor an entry are dropped.
 pub fn parse_tks(content: &str, date_format: &str) -> Vec<TksDay> {
-    let entry_re = Regex::new(r"^(?P<alias>\S+)\s+(?P<times>\S+)\s*(?P<desc>.*)$")
-        .expect("regex compiles");
+    let entry_re =
+        Regex::new(r"^(?P<alias>\S+)\s+(?P<times>\S+)\s*(?P<desc>.*)$").expect("regex compiles");
 
     let mut days: Vec<TksDay> = Vec::new();
     let mut current: Option<TksDay> = None;
@@ -258,8 +258,7 @@ pub fn replace_day(
     }
 
     let tmp = path.with_extension("tks.tmp");
-    std::fs::write(&tmp, payload.as_bytes())
-        .with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::write(&tmp, payload.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
@@ -321,9 +320,7 @@ fn append_day_at(
         // Trim trailing blanks inside the section so the marker hugs the
         // last real entry.
         let mut section_end = end;
-        while section_end > start + 1
-            && lines[section_end - 1].trim().is_empty()
-        {
+        while section_end > start + 1 && lines[section_end - 1].trim().is_empty() {
             section_end -= 1;
         }
 
@@ -355,8 +352,7 @@ fn append_day_at(
     }
 
     let tmp = path.with_extension("tks.tmp");
-    std::fs::write(&tmp, payload.as_bytes())
-        .with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::write(&tmp, payload.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
@@ -383,10 +379,7 @@ impl TaxiRunner {
         if !self.available {
             anyhow::bail!("taxi runner not available (uv missing or empty command)");
         }
-        let (head, tail) = self
-            .argv
-            .split_first()
-            .context("taxi command is empty")?;
+        let (head, tail) = self.argv.split_first().context("taxi command is empty")?;
         let mut cmd = Command::new(head);
         cmd.args(tail).args(args);
         cmd.stdin(Stdio::null());
@@ -443,13 +436,11 @@ pub struct AliasInfo {
 /// The leading `[backend]` tag is dropped. A trailing parenthesised group is
 /// captured into `AliasInfo.description`.
 pub fn parse_alias_list(stdout: &str) -> BTreeMap<String, AliasInfo> {
-    let backend_re = Regex::new(
-        r"^\s*\[(?P<backend>[^\]]+)\]\s+(?P<alias>\S+)\s+->\s+(?P<mapping>.+?)\s*$",
-    )
-    .expect("regex compiles");
-    let sep_re =
-        Regex::new(r"^\s*(?P<alias>\S+)\s*(?:=|->|:)\s*(?P<mapping>.+?)\s*$")
+    let backend_re =
+        Regex::new(r"^\s*\[(?P<backend>[^\]]+)\]\s+(?P<alias>\S+)\s+->\s+(?P<mapping>.+?)\s*$")
             .expect("regex compiles");
+    let sep_re = Regex::new(r"^\s*(?P<alias>\S+)\s*(?:=|->|:)\s*(?P<mapping>.+?)\s*$")
+        .expect("regex compiles");
     let two_token_re =
         Regex::new(r"^\s*(?P<alias>\S+)\s+(?P<mapping>\S+)\s*$").expect("regex compiles");
 
@@ -561,10 +552,7 @@ _meet = 999/999
         let days = parse_tks(raw, "%d/%m/%Y");
         assert_eq!(days.len(), 1);
         assert_eq!(days[0].entries[0].alias, "pingpong");
-        assert_eq!(
-            days[0].entries[0].start,
-            NaiveTime::from_hms_opt(9, 0, 0)
-        );
+        assert_eq!(days[0].entries[0].start, NaiveTime::from_hms_opt(9, 0, 0));
     }
 
     #[test]
@@ -742,7 +730,10 @@ _meet = 999/999
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("_old 08:00-09:00 prior"));
         assert!(content.contains("_old 09:15-09:30 still here"));
-        assert!(content.contains(APPEND_MARKER), "marker missing:\n{content}");
+        assert!(
+            content.contains(APPEND_MARKER),
+            "marker missing:\n{content}"
+        );
         assert!(content.contains("_new 10:00-11:00 added"));
 
         let prior = content.find("_old 08:00-09:00 prior").unwrap();
@@ -823,7 +814,10 @@ _meet = 999/999
 [default] _qux -> 7/16
 ";
         let m = parse_alias_list(s);
-        assert_eq!(map(&m, "_foo_dev"), ("1000/2000", "Some Project, Some Subtask"));
+        assert_eq!(
+            map(&m, "_foo_dev"),
+            ("1000/2000", "Some Project, Some Subtask")
+        );
         assert_eq!(map(&m, "__break"), ("not mapped", ""));
         assert_eq!(map(&m, "_bar"), ("1/2/3", ""));
         assert_eq!(map(&m, "_baz"), ("4/5/6", "Internal exploration"));

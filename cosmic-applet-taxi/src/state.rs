@@ -61,7 +61,6 @@ impl Timer {
     pub fn is_running(&self) -> bool {
         self.running_session().is_some()
     }
-
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -95,10 +94,9 @@ impl AppState {
                 ..Self::default()
             });
         }
-        let bytes = std::fs::read(&path)
-            .with_context(|| format!("read {}", path.display()))?;
-        let mut state: AppState = serde_json::from_slice(&bytes)
-            .with_context(|| format!("parse {}", path.display()))?;
+        let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        let mut state: AppState =
+            serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
         if state.schema_version == 0 {
             state.schema_version = SCHEMA_VERSION;
         }
@@ -211,11 +209,7 @@ impl AppState {
     /// Resume the one timer marked `auto_resume` (we only ever set the flag on
     /// the previously running timer, since the single-running invariant holds).
     pub fn auto_resume_one(&mut self, now: DateTime<Local>) {
-        let target = self
-            .timers
-            .iter()
-            .find(|t| t.auto_resume)
-            .map(|t| t.id);
+        let target = self.timers.iter().find(|t| t.auto_resume).map(|t| t.id);
         if let Some(id) = target {
             self.start_timer(id, now);
         }
@@ -247,9 +241,8 @@ pub fn sum_for_date(
     cutover_hour: u8,
     now: DateTime<Local>,
 ) -> Duration {
-    sessions_for_date(timer, day, cutover_hour).fold(Duration::zero(), |acc, s| {
-        acc + s.duration(now)
-    })
+    sessions_for_date(timer, day, cutover_hour)
+        .fold(Duration::zero(), |acc, s| acc + s.duration(now))
 }
 
 /// Effective "work date" of an instant, shifted by the cut-over hour.
@@ -302,7 +295,10 @@ mod tests {
         s.start_timer(a, at(9, 0));
         s.start_timer(b, at(9, 30));
         assert_eq!(s.timers.iter().filter(|t| t.is_running()).count(), 1);
-        assert_eq!(s.timers.iter().find(|t| t.id == b).unwrap().sessions.len(), 1);
+        assert_eq!(
+            s.timers.iter().find(|t| t.id == b).unwrap().sessions.len(),
+            1
+        );
         assert_eq!(
             s.timers.iter().find(|t| t.id == a).unwrap().sessions[0]
                 .end

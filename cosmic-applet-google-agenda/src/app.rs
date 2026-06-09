@@ -167,16 +167,24 @@ impl cosmic::Application for AppModel {
             .push(icon_area)
             .push(badge);
 
-        let time_text = self.config.show_time.then(|| {
-            self.next
-                .as_ref()
-                .map(|ev| label_widget(format_relative(now, ev.start), label_size, true))
-        }).flatten();
-        let title_widget = self.config.show_title.then(|| {
-            self.next
-                .as_ref()
-                .map(|ev| label_widget(truncate_title(&ev.summary, 20), label_size, false))
-        }).flatten();
+        let time_text = self
+            .config
+            .show_time
+            .then(|| {
+                self.next
+                    .as_ref()
+                    .map(|ev| label_widget(format_relative(now, ev.start), label_size, true))
+            })
+            .flatten();
+        let title_widget = self
+            .config
+            .show_title
+            .then(|| {
+                self.next
+                    .as_ref()
+                    .map(|ev| label_widget(truncate_title(&ev.summary, 20), label_size, false))
+            })
+            .flatten();
 
         let mut row = Row::new()
             .align_y(cosmic::iced::Alignment::Center)
@@ -214,7 +222,8 @@ impl cosmic::Application for AppModel {
 
     fn subscription(&self) -> Subscription<Self::Message> {
         let display = cosmic::iced::time::every(self.config.display_tick()).map(|_| Message::Tick);
-        let fetch = cosmic::iced::time::every(self.config.fetch_interval()).map(|_| Message::Refetch);
+        let fetch =
+            cosmic::iced::time::every(self.config.fetch_interval()).map(|_| Message::Refetch);
         let watch = self
             .core()
             .watch_config::<Config>(Self::APP_ID)
@@ -390,21 +399,24 @@ fn dispatch_surface(a: surface::Action) -> Task<Message> {
 }
 
 fn sigusr2_stream() -> impl cosmic::iced::futures::Stream<Item = Message> {
-    cosmic::iced::stream::channel(4, |mut sender: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
-        let mut sig = match signal(SignalKind::user_defined2()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to install SIGUSR2 handler");
-                return;
+    cosmic::iced::stream::channel(
+        4,
+        |mut sender: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
+            let mut sig = match signal(SignalKind::user_defined2()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to install SIGUSR2 handler");
+                    return;
+                }
+            };
+            while sig.recv().await.is_some() {
+                tracing::info!("SIGUSR2 received, forcing refetch");
+                if sender.send(Message::Refetch).await.is_err() {
+                    break;
+                }
             }
-        };
-        while sig.recv().await.is_some() {
-            tracing::info!("SIGUSR2 received, forcing refetch");
-            if sender.send(Message::Refetch).await.is_err() {
-                break;
-            }
-        }
-    })
+        },
+    )
 }
 
 fn sigusr2_subscription() -> Subscription<Message> {
@@ -415,8 +427,10 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
     let action = surface::action::app_popup::<AppModel>(
         move |state: &mut AppModel| {
             let parent = state.core.main_window_id().unwrap_or(Id::NONE);
-            let mut settings =
-                state.core.applet.get_popup_settings(parent, new_id, None, None, None);
+            let mut settings = state
+                .core
+                .applet
+                .get_popup_settings(parent, new_id, None, None, None);
             settings.grab = true;
             settings.positioner.size_limits = Limits::NONE
                 .max_width(280.0)
@@ -437,8 +451,10 @@ fn open_info_popup(new_id: Id) -> Task<Message> {
     let action = surface::action::app_popup::<AppModel>(
         move |state: &mut AppModel| {
             let parent = state.core.main_window_id().unwrap_or(Id::NONE);
-            let mut settings =
-                state.core.applet.get_popup_settings(parent, new_id, None, None, None);
+            let mut settings = state
+                .core
+                .applet
+                .get_popup_settings(parent, new_id, None, None, None);
             settings.grab = true;
             settings.positioner.size_limits = Limits::NONE
                 .max_width(360.0)
@@ -650,7 +666,9 @@ mod tests {
     use chrono::{Duration, TimeZone};
 
     fn ts(h: i64, m: i64) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 5, 12, 12, 0, 0).unwrap() + Duration::hours(h) + Duration::minutes(m)
+        Utc.with_ymd_and_hms(2026, 5, 12, 12, 0, 0).unwrap()
+            + Duration::hours(h)
+            + Duration::minutes(m)
     }
 
     fn ev(id: &str, start_h: i64, end_h: i64) -> Event {
@@ -676,7 +694,11 @@ mod tests {
 
     #[test]
     fn recompute_next_picks_first_unfinished_event() {
-        let mut events = vec![ev("past", -2, -1), ev("now-running", -1, 1), ev("later", 2, 3)];
+        let mut events = vec![
+            ev("past", -2, -1),
+            ev("now-running", -1, 1),
+            ev("later", 2, 3),
+        ];
         let mut next = None;
         recompute_next(&mut events, &mut next, ts(0, 0));
         assert_eq!(next.as_ref().map(|e| e.id.as_str()), Some("now-running"));
@@ -746,7 +768,13 @@ mod tests {
     #[test]
     fn truncate_title_appends_ellipsis() {
         assert_eq!(truncate_title("hi", 20), "hi");
-        assert_eq!(truncate_title("0123456789abcdefghij", 20), "0123456789abcdefghij");
-        assert_eq!(truncate_title("0123456789abcdefghijK", 20), "0123456789abcdefghi\u{2026}");
+        assert_eq!(
+            truncate_title("0123456789abcdefghij", 20),
+            "0123456789abcdefghij"
+        );
+        assert_eq!(
+            truncate_title("0123456789abcdefghijK", 20),
+            "0123456789abcdefghi\u{2026}"
+        );
     }
 }

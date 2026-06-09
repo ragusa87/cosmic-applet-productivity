@@ -118,15 +118,17 @@ impl cosmic::Application for AppModel {
                 .height(Length::Fixed(badge_height))
                 .align_x(cosmic::iced::alignment::Horizontal::Center)
                 .align_y(cosmic::iced::alignment::Vertical::Center)
-                .style(move |_theme: &cosmic::Theme| cosmic::iced::widget::container::Style {
-                    background: Some(cosmic::iced::Background::Color(badge_color)),
-                    border: cosmic::iced::Border {
-                        radius: cosmic::iced::border::Radius::from(badge_radius),
+                .style(
+                    move |_theme: &cosmic::Theme| cosmic::iced::widget::container::Style {
+                        background: Some(cosmic::iced::Background::Color(badge_color)),
+                        border: cosmic::iced::Border {
+                            radius: cosmic::iced::border::Radius::from(badge_radius),
+                            ..Default::default()
+                        },
+                        text_color: Some(Color::WHITE),
                         ..Default::default()
                     },
-                    text_color: Some(Color::WHITE),
-                    ..Default::default()
-                });
+                );
 
             let badge_area = cosmic::widget::container(badge_pill)
                 .width(Length::Fixed(stack_px))
@@ -237,20 +239,23 @@ fn dispatch_surface(a: surface::Action) -> Task<Message> {
 }
 
 fn sigusr2_stream() -> impl cosmic::iced::futures::Stream<Item = Message> {
-    cosmic::iced::stream::channel(4, |mut sender: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
-        let mut sig = match signal(SignalKind::user_defined2()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to install SIGUSR2 handler");
-                return;
+    cosmic::iced::stream::channel(
+        4,
+        |mut sender: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
+            let mut sig = match signal(SignalKind::user_defined2()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to install SIGUSR2 handler");
+                    return;
+                }
+            };
+            while sig.recv().await.is_some() {
+                if sender.send(Message::ForceRefresh).await.is_err() {
+                    break;
+                }
             }
-        };
-        while sig.recv().await.is_some() {
-            if sender.send(Message::ForceRefresh).await.is_err() {
-                break;
-            }
-        }
-    })
+        },
+    )
 }
 
 fn sigusr2_subscription() -> Subscription<Message> {
@@ -261,8 +266,10 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
     let action = surface::action::app_popup::<AppModel>(
         move |state: &mut AppModel| {
             let parent = state.core.main_window_id().unwrap_or(Id::NONE);
-            let mut settings =
-                state.core.applet.get_popup_settings(parent, new_id, None, None, None);
+            let mut settings = state
+                .core
+                .applet
+                .get_popup_settings(parent, new_id, None, None, None);
             settings.grab = true;
             settings.positioner.size_limits = Limits::NONE
                 .max_width(280.0)

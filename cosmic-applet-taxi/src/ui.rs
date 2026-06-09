@@ -18,8 +18,7 @@ pub fn popup_view(app: &AppModel) -> Element<'_, Message> {
 
     if app.state.timers.is_empty() {
         col = col.push(
-            text::body("No timers yet — use “+ Add timer” to start tracking.")
-                .width(Length::Fill),
+            text::body("No timers yet — use “+ Add timer” to start tracking.").width(Length::Fill),
         );
     } else if let Some(editing_id) = app.editing {
         // Exclusive edit view: only the timer being edited is visible.
@@ -169,8 +168,7 @@ fn edit_row<'a>(app: &'a AppModel, t: &'a Timer) -> Element<'a, Message> {
     let buf = &app.edit_buf;
 
     let suggestions = app.alias_suggestions(&buf.alias);
-    let show_suggestions =
-        !suggestions.is_empty() && buf.alias != t.alias && !buf.alias_picked;
+    let show_suggestions = !suggestions.is_empty() && buf.alias != t.alias && !buf.alias_picked;
     let suggest_dropdown = if show_suggestions {
         let mut sc = Column::new().spacing(2);
         for s in suggestions {
@@ -268,10 +266,7 @@ fn edit_row<'a>(app: &'a AppModel, t: &'a Timer) -> Element<'a, Message> {
         .into()
 }
 
-fn suggestion_row(
-    s: AliasSuggestion,
-    on_pick: fn(String) -> Message,
-) -> Element<'static, Message> {
+fn suggestion_row(s: AliasSuggestion, on_pick: fn(String) -> Message) -> Element<'static, Message> {
     let AliasSuggestion { alias, description } = s;
     let alias_label = text::body(alias.clone()).font(cosmic::font::bold());
     let body: Element<'static, Message> = if description.is_empty() {
@@ -352,7 +347,7 @@ fn total_row(app: &AppModel) -> Element<'_, Message> {
 
 // Footer-action glyphs. Distinct from RESET_ICON / EDIT_ICON / PLAY /
 // PAUSE_ICON used in timer rows.
-const FOOTER_EXPORT: &str = "\u{2B07}";  // ⬇
+const FOOTER_EXPORT: &str = "\u{2B07}"; // ⬇
 const FOOTER_ADD: &str = "+";
 const FOOTER_SETTINGS: &str = "\u{2699}"; // ⚙
 const FOOTER_REFRESH: &str = "\u{27F3}"; // ⟳ (distinct from ↻ used for Reset)
@@ -425,4 +420,3 @@ fn add_row(app: &AppModel) -> Element<'_, Message> {
         .push(dropdown)
         .into()
 }
-

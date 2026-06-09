@@ -18,9 +18,14 @@ async fn run_async() -> Result<()> {
 
     let report = slack::debug_scan().await.context("debug_scan")?;
 
-    println!("Bus names enumerated: {} total ({} are connection names like :1.X)",
-        report.total_names, report.connection_names);
-    println!("Slack-owned connections found: {}", report.slack_candidates.len());
+    println!(
+        "Bus names enumerated: {} total ({} are connection names like :1.X)",
+        report.total_names, report.connection_names
+    );
+    println!(
+        "Slack-owned connections found: {}",
+        report.slack_candidates.len()
+    );
     println!();
 
     if report.slack_candidates.is_empty() {

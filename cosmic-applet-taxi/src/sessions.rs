@@ -32,10 +32,7 @@ impl Span {
 }
 
 /// Group **closed** sessions by their cut-over-shifted date.
-pub fn group_by_date(
-    sessions: &[Session],
-    cutover_hour: u8,
-) -> BTreeMap<NaiveDate, Vec<Session>> {
+pub fn group_by_date(sessions: &[Session], cutover_hour: u8) -> BTreeMap<NaiveDate, Vec<Session>> {
     let mut out: BTreeMap<NaiveDate, Vec<Session>> = BTreeMap::new();
     for s in sessions {
         if s.end.is_none() {
@@ -311,7 +308,9 @@ mod tests {
 
     fn s(start: (u32, u32), end: Option<(u32, u32)>, desc: &str) -> Session {
         Session {
-            start: Local.with_ymd_and_hms(2026, 5, 13, start.0, start.1, 0).unwrap(),
+            start: Local
+                .with_ymd_and_hms(2026, 5, 13, start.0, start.1, 0)
+                .unwrap(),
             end: end.map(|(h, m)| Local.with_ymd_and_hms(2026, 5, 13, h, m, 0).unwrap()),
             description: desc.into(),
         }
@@ -319,8 +318,12 @@ mod tests {
 
     fn span(start: (u32, u32), end: (u32, u32), desc: &str) -> Span {
         Span {
-            start: Local.with_ymd_and_hms(2026, 5, 13, start.0, start.1, 0).unwrap(),
-            end: Local.with_ymd_and_hms(2026, 5, 13, end.0, end.1, 0).unwrap(),
+            start: Local
+                .with_ymd_and_hms(2026, 5, 13, start.0, start.1, 0)
+                .unwrap(),
+            end: Local
+                .with_ymd_and_hms(2026, 5, 13, end.0, end.1, 0)
+                .unwrap(),
             description: desc.into(),
             original: None,
         }
@@ -409,9 +412,7 @@ mod tests {
         // 22:30:05, the wall-clock minute is already on the grid, so
         // we drop the sub-minute precision and return 22:30 — NOT
         // 22:45.
-        let with_seconds = Local
-            .with_ymd_and_hms(2026, 5, 13, 22, 30, 5)
-            .unwrap();
+        let with_seconds = Local.with_ymd_and_hms(2026, 5, 13, 22, 30, 5).unwrap();
         assert_eq!(round_end(with_seconds, 15), at(22, 30));
     }
 
@@ -477,8 +478,7 @@ mod tests {
         };
         let real_work = span((10, 0), (11, 0), "real");
 
-        let (zeros, nonzero) =
-            split_zero_duration(vec![same_minute_a, same_minute_b, real_work]);
+        let (zeros, nonzero) = split_zero_duration(vec![same_minute_a, same_minute_b, real_work]);
         assert_eq!(zeros.len(), 2);
         assert_eq!(nonzero.len(), 1);
         assert_eq!(nonzero[0].description, "real");
@@ -530,9 +530,7 @@ mod tests {
 
     #[test]
     fn aggregate_zero_below_threshold_returns_none() {
-        let zeros: Vec<Span> = (0..3)
-            .map(|_| span((9, 0), (9, 0), "x"))
-            .collect();
+        let zeros: Vec<Span> = (0..3).map(|_| span((9, 0), (9, 0), "x")).collect();
         assert!(aggregate_zero(&zeros).is_none());
     }
 
@@ -630,10 +628,7 @@ mod tests {
             description: String::new(),
         };
         let out = aggregate_lines(&agg, "_alias", 15);
-        assert_eq!(
-            out[0],
-            "# 1 zero-duration session consolidated into 15 min"
-        );
+        assert_eq!(out[0], "# 1 zero-duration session consolidated into 15 min");
     }
 
     #[test]
@@ -680,7 +675,10 @@ mod tests {
 
     #[test]
     fn group_by_date_assigns_pre_cutover_to_prev_day() {
-        let v = vec![s((3, 0), Some((3, 30)), "early"), s((10, 0), Some((11, 0)), "late")];
+        let v = vec![
+            s((3, 0), Some((3, 30)), "early"),
+            s((10, 0), Some((11, 0)), "late"),
+        ];
         let g = group_by_date(&v, 4);
         let keys: Vec<&NaiveDate> = g.keys().collect();
         assert_eq!(keys.len(), 2);
