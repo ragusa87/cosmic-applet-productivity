@@ -5,6 +5,7 @@ members = [
     "cosmic-applet-gmail",
     "cosmic-applet-google-agenda",
     "cosmic-applet-taxi",
+    "cosmic-applet-slack",
 ]
 
 [workspace.package]
