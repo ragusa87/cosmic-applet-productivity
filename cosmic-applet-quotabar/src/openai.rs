@@ -100,38 +100,6 @@ fn load_credentials() -> Result<OpenAiCredentials> {
     })
 }
 
-fn save_refreshed(creds: &OpenAiCredentials) -> Result<()> {
-    let path = auth_path()?;
-    let data = std::fs::read(&path)
-        .with_context(|| format!("read {}", path.display()))?;
-    let mut json: serde_json::Value =
-        serde_json::from_slice(&data).with_context(|| format!("parse {}", path.display()))?;
-
-    let now_iso = chrono::Utc::now().to_rfc3339();
-    json["last_refresh"] = serde_json::Value::String(now_iso);
-    if let Some(obj) = json.get_mut("tokens").and_then(|v| v.as_object_mut()) {
-        obj.insert(
-            "access_token".to_owned(),
-            serde_json::Value::String(creds.access_token.clone()),
-        );
-        if let Some(rt) = creds.refresh_token.as_ref() {
-            obj.insert(
-                "refresh_token".to_owned(),
-                serde_json::Value::String(rt.clone()),
-            );
-        }
-        if let Some(id) = creds.id_token.as_ref() {
-            obj.insert("id_token".to_owned(), serde_json::Value::String(id.clone()));
-        }
-    }
-
-    let serialized = serde_json::to_vec_pretty(&json)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serialized)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
-}
-
 #[derive(Debug, Serialize)]
 struct RefreshRequest<'a> {
     client_id: &'a str,
@@ -250,9 +218,6 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
     if creds.should_refresh_proactively() {
         match refresh(client, &creds).await {
             Ok(new) => {
-                if let Err(e) = save_refreshed(&new) {
-                    tracing::warn!(error = %e, "failed to persist refreshed OpenAI credentials");
-                }
                 creds = new;
             }
             Err(e) => {
@@ -271,9 +236,6 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
                 return Err(e);
             }
             creds = refresh(client, &creds).await?;
-            if let Err(e) = save_refreshed(&creds) {
-                tracing::warn!(error = %e, "failed to persist refreshed OpenAI credentials");
-            }
             fetch_usage(client, &creds).await?
         }
     };
