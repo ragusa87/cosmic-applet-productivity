@@ -1,0 +1,27 @@
+[package]
+name = "cosmic-applet-quotabar"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+authors.workspace = true
+description = "COSMIC panel applet that shows OpenAI + Anthropic AI API token usage. Ported from the Swift mr-chatter project (https://github.com/Jonathanm10/mr-chatter)."
+repository = "https://github.com/ragusa87/cosmic-applet-gmail"
+
+[[bin]]
+name = "cosmic-applet-quotabar"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+libcosmic = { workspace = true }

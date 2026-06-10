@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=AI Quota Bar
+Comment=Show OpenAI and Anthropic API token usage in the COSMIC panel
+Exec=cosmic-applet-quotabar
+Icon=com.github.ragusa87.CosmicAppletQuotaBar
+Terminal=false
+Categories=COSMIC;X-COSMIC-Applet;
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=2

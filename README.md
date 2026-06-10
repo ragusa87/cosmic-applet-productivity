@@ -1,9 +1,10 @@
-# cosmic-applet for productivity (google+taxi+slack)
+# cosmic-applet for productivity (google+taxi+slack+quotabar)
 
-Four COSMIC desktop panel applets — two that surface bits of your Google
+Five COSMIC desktop panel applets — two that surface bits of your Google
 account, one that tracks time and exports to a [taxi](https://github.com/sephii/taxi)
-timesheet, and one that mirrors the Slack tray-icon unread count by reading
-its DBus tooltip:
+timesheet, one that mirrors the Slack tray-icon unread count by reading
+its DBus tooltip, and one that surfaces your OpenAI + Anthropic AI API
+usage in the panel:
 
 | Applet | Binary | What it shows | Icon |
 |---|---|---|---|
@@ -11,6 +12,7 @@ its DBus tooltip:
 | [Next meeting](#google-agenda-applet) | `cosmic-applet-google-agenda` | Next Google Calendar event with a live countdown, plus a desktop notification a few minutes before it starts. |![calendar-preview.png](cosmic-applet-google-agenda/calendar-preview.png)|
 | [Taxi tracker](#taxi-tracker-applet) | `cosmic-applet-taxi` | Multi-timer time tracking with daily auto-export to `taxi` (e.g. Liip's Zebra). | |
 | [Slack Unread](#slack-applet) | `cosmic-applet-slack` | Badge mirroring Slack's tray-icon ToolTip — pulled over DBus, no Slack API, no token. | |
+| [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project, MIT-licensed. | |
 
 The two Google-backed applets follow the same model:
 
@@ -37,6 +39,15 @@ unread count out of the tooltip text. No OAuth, no Slack API, no token; it
 just mirrors whatever Slack already publishes to the desktop's tray
 protocol.
 
+The fifth applet, `cosmic-applet-quotabar`, is a Rust / libcosmic port of
+[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) (the project
+formerly known as `QuotaBar`). It reads the OAuth sessions that
+[Claude Code](https://claude.com/claude-code) and
+[Codex](https://github.com/openai/codex) already keep on disk and hits
+each provider's usage endpoint, so there's nothing to configure — if
+you've logged into either CLI, the panel just shows your remaining
+5-hour and weekly quotas. MIT-licensed to match upstream.
+
 ## Build & install
 
 Requires Rust 1.85+ (for `edition = "2024"`), `just`, and a working Wayland
@@ -45,14 +56,14 @@ it must be running for either applet to remember credentials.
 
 ```sh
 just build-release
-just install-user        # installs all four applets into ~/.local; use `sudo just install` for /usr
+just install-user        # installs all five applets into ~/.local; use `sudo just install` for /usr
 ```
 
 `just install-user` lays each applet's binary, desktop entry, and icon into:
 
-- `~/.local/bin/cosmic-applet-{gmail,google-agenda,taxi,slack}`
-- `~/.local/share/applications/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi,Slack}.desktop`
-- `~/.local/share/icons/hicolor/scalable/apps/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi,Slack}.svg`
+- `~/.local/bin/cosmic-applet-{gmail,google-agenda,taxi,slack,quotabar}`
+- `~/.local/share/applications/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi,Slack,QuotaBar}.desktop`
+- `~/.local/share/icons/hicolor/scalable/apps/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi,Slack,QuotaBar}.svg`
 
 > ⚠️ `~/.local/bin` must be on your `$PATH` — the panel runs the binary by
 > name (`Exec=cosmic-applet-gmail` etc.) and resolves it via `PATH`. Most
@@ -69,6 +80,8 @@ cargo build --release -p cosmic-applet-google-agenda
 cargo build --release -p cosmic-applet-taxi
 # or
 cargo build --release -p cosmic-applet-slack
+# or
+cargo build --release -p cosmic-applet-quotabar
 ```
 
 ### Add an applet to the panel
@@ -80,8 +93,9 @@ installed:
 
 1. **Settings → Desktop → Panel** (or right-click the panel → *Configure*).
 2. Scroll to **Applets** → **Add Applet**.
-3. Pick **Gmail Unread**, **Next meeting**, **Taxi tracker**, and/or
-   **Slack Unread** from the list and drag it into Left, Center, or Right.
+3. Pick **Gmail Unread**, **Next meeting**, **Taxi tracker**,
+   **Slack Unread**, and/or **AI Quota Bar** from the list and drag it
+   into Left, Center, or Right.
 
 If the entry does not appear in the Add-Applet list, the panel has cached
 its applet index. Force a re-scan with one of:
@@ -100,7 +114,7 @@ below, and right-click the new panel icon → **Credentials** to authorize.
 just uninstall-user       # or `sudo just uninstall` for /usr
 ```
 
-Removes the binary, desktop entry, and icon for **all four** applets.
+Removes the binary, desktop entry, and icon for **all five** applets.
 
 ## One-time Google Cloud setup
 
@@ -160,9 +174,10 @@ pkill -USR2 -f cosmic-applet-gmail            # poll Gmail right now
 pkill -USR2 -f cosmic-applet-google-agenda    # refetch calendar right now
 pkill -USR2 -f cosmic-applet-taxi             # reload taxi state right now
 pkill -USR2 -f cosmic-applet-slack            # re-read Slack tooltip right now
+pkill -USR2 -f cosmic-applet-quotabar         # refetch AI quotas right now
 ```
 
-Or, to signal all four at once:
+Or, to signal all five at once:
 
 ```sh
 just refresh
@@ -171,10 +186,11 @@ just refresh
 On receiving SIGUSR2, the Google applets reload the OAuth tokens from
 Secret Service and fetch right away; the taxi applet reloads its state
 file and re-detects `uv`; the Slack applet wakes the DBus discovery loop
-and re-reads the StatusNotifierItem tooltip. The settings windows
-(running under the same binary names) ignore SIGUSR2, so sending the
-signal to all processes with that name is safe — only the panel applet
-acts on it.
+and re-reads the StatusNotifierItem tooltip; the QuotaBar applet
+re-reads the local Claude / Codex OAuth files and refetches both
+providers' usage. The settings windows (running under the same binary
+names) ignore SIGUSR2, so sending the signal to all processes with that
+name is safe — only the panel applet acts on it.
 
 ### Pre-filling credentials from the environment
 
@@ -412,6 +428,71 @@ forks), edit `SLACK_PROCESS` in `cosmic-applet-slack/src/slack.rs`.
 icon via `org.kde.StatusNotifierItem` (standard for years). Wayland +
 COSMIC panel as usual. Nothing else.
 
+## QuotaBar applet
+
+`cosmic-applet-quotabar` is a Rust / libcosmic port of the Swift
+[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project
+(formerly `QuotaBar`) by Jonathan M. It shows your remaining
+**OpenAI** + **Anthropic** API quotas in the COSMIC panel by reading
+the local OAuth sessions that the Claude Code and Codex CLIs already
+maintain — **no extra credentials, no API keys, no Google Cloud
+setup**.
+
+This crate is **MIT-licensed** to match the upstream project; see
+[`cosmic-applet-quotabar/LICENSE`](cosmic-applet-quotabar/LICENSE).
+The rest of the workspace stays GPL-3.0-or-later.
+
+**What you see** — the panel button shows the worst-used percentage
+across both providers (e.g. `8%`). Left-click opens a popup with a
+horizontal bar per provider × window (Daily = 5h, Weekly = 7d),
+color-graded from green (low) through orange to red (≥ 90%). Right-click
+gives a one-item **Refresh** menu.
+
+**How auth works** — there is no OAuth flow inside the applet:
+
+- **Anthropic** — reads `~/.claude/.credentials.json` (the file
+  Claude Code writes after `claude login`), refreshes the token via
+  `platform.claude.com/v1/oauth/token` when it's expired, then calls
+  `api.anthropic.com/api/oauth/usage` to fetch the 5h / 7d
+  utilization. Refreshed tokens are written back to the same file
+  atomically.
+- **OpenAI** — reads `~/.codex/auth.json` (the file the Codex CLI
+  writes after `codex login`), refreshes via
+  `auth.openai.com/oauth/token` when needed, then calls
+  `chatgpt.com/backend-api/wham/usage` for the primary / secondary
+  rate-limit windows. API-key-only auth modes
+  (`OPENAI_API_KEY` in `auth.json`) are intentionally rejected — the
+  ChatGPT usage endpoint requires an OAuth session.
+
+If either local credential file is missing the applet keeps working
+with the other provider; the missing one shows an inline warning in
+the popup.
+
+**Refresh cadence** — every **5 minutes** automatically, plus on
+demand via the popup's Refresh button, the right-click menu, or
+`pkill -USR2 -f cosmic-applet-quotabar`.
+
+**Configuration** — none. Both endpoints, the OAuth client IDs, and
+the credential file paths are hardcoded to match what Claude Code and
+Codex use today.
+
+**Debugging what the panel sees** — print one snapshot per provider
+and exit:
+
+```sh
+cosmic-applet-quotabar --debug
+```
+
+The output dumps the parsed `ProviderSnapshot` (used percent, reset
+timestamp) for each provider, or the underlying error string when a
+fetch fails (missing credentials, expired refresh token, HTTP error,
+etc.).
+
+**Requirements** — `~/.claude/.credentials.json` from a logged-in
+Claude Code install, and/or `~/.codex/auth.json` from a logged-in
+Codex install. Both files are produced by `claude login` / `codex
+login` respectively; the applet never invokes those flows itself.
+
 ## Troubleshooting
 
 - **Gmail panel shows `—` forever** → the applet has no credentials;
@@ -445,15 +526,22 @@ COSMIC panel as usual. Nothing else.
 ```
 cosmic-applet-google/
 ├── Cargo.toml                       # workspace root
-├── justfile                         # build/install/uninstall for all four applets
+├── justfile                         # build/install/uninstall for all five applets
 ├── cosmic-google-common/            # shared OAuth2 + Secret Service helpers (gmail + agenda)
 ├── cosmic-applet-gmail/             # Gmail Unread applet
 ├── cosmic-applet-google-agenda/     # Next meeting applet
 ├── cosmic-applet-taxi/              # Time tracker + taxi/Zebra exporter
-└── cosmic-applet-slack/             # Slack unread badge via DBus tray ToolTip
+├── cosmic-applet-slack/             # Slack unread badge via DBus tray ToolTip
+└── cosmic-applet-quotabar/          # OpenAI + Anthropic API quota bar (MIT-licensed port of mr-chatter)
 ```
 
 ## License
 
-Source code: GPL-3.0-or-later. See [LICENSE.md](LICENSE.md) for the icon
-attribution (CC0 1.0 Universal, Simple Icons).
+Source code: GPL-3.0-or-later, **except** `cosmic-applet-quotabar/`
+which is MIT-licensed to match its upstream
+[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project. See
+[LICENSE.md](LICENSE.md) for the full workspace notice (including the
+per-crate exception and icon attribution: CC0 1.0 Universal, Simple
+Icons), and
+[`cosmic-applet-quotabar/LICENSE`](cosmic-applet-quotabar/LICENSE) for
+the MIT text and upstream copyright.
