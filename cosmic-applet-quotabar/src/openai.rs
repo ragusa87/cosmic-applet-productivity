@@ -67,10 +67,9 @@ fn parse_last_refresh(s: &str) -> Option<DateTime<Utc>> {
 
 fn load_credentials() -> Result<OpenAiCredentials> {
     let path = auth_path()?;
-    let data = std::fs::read(&path)
-        .with_context(|| format!("read {}", path.display()))?;
-    let decoded: AuthFile = serde_json::from_slice(&data)
-        .with_context(|| format!("parse {}", path.display()))?;
+    let data = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let decoded: AuthFile =
+        serde_json::from_slice(&data).with_context(|| format!("parse {}", path.display()))?;
 
     if let Some(key) = decoded.openai_api_key.as_deref()
         && !key.trim().is_empty()
@@ -118,10 +117,7 @@ struct RefreshResponse {
     id_token: Option<String>,
 }
 
-async fn refresh(
-    client: &reqwest::Client,
-    creds: &OpenAiCredentials,
-) -> Result<OpenAiCredentials> {
+async fn refresh(client: &reqwest::Client, creds: &OpenAiCredentials) -> Result<OpenAiCredentials> {
     let refresh_token = creds
         .refresh_token
         .as_deref()
@@ -144,7 +140,9 @@ async fn refresh(
     let refreshed: RefreshResponse = response.json().await?;
     Ok(OpenAiCredentials {
         access_token: refreshed.access_token,
-        refresh_token: refreshed.refresh_token.or_else(|| creds.refresh_token.clone()),
+        refresh_token: refreshed
+            .refresh_token
+            .or_else(|| creds.refresh_token.clone()),
         account_id: creds.account_id.clone(),
         id_token: refreshed.id_token.or_else(|| creds.id_token.clone()),
         last_refresh: Some(chrono::Utc::now()),
@@ -177,10 +175,7 @@ enum OpenAiError {
     Unauthorized,
 }
 
-async fn fetch_usage(
-    client: &reqwest::Client,
-    creds: &OpenAiCredentials,
-) -> Result<UsageResponse> {
+async fn fetch_usage(client: &reqwest::Client, creds: &OpenAiCredentials) -> Result<UsageResponse> {
     let mut req = client
         .get(USAGE_ENDPOINT)
         .bearer_auth(&creds.access_token)

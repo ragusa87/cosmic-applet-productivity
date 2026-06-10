@@ -53,10 +53,9 @@ fn credentials_path() -> Result<PathBuf> {
 
 fn load_credentials() -> Result<ClaudeOAuthCredentials> {
     let path = credentials_path()?;
-    let data = std::fs::read(&path)
-        .with_context(|| format!("read {}", path.display()))?;
-    let env: CredentialEnvelope = serde_json::from_slice(&data)
-        .with_context(|| format!("parse {}", path.display()))?;
+    let data = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let env: CredentialEnvelope =
+        serde_json::from_slice(&data).with_context(|| format!("parse {}", path.display()))?;
     Ok(env.claude_ai_oauth)
 }
 
@@ -113,7 +112,9 @@ async fn refresh(
 
     Ok(ClaudeOAuthCredentials {
         access_token: refreshed.access_token,
-        refresh_token: refreshed.refresh_token.or_else(|| creds.refresh_token.clone()),
+        refresh_token: refreshed
+            .refresh_token
+            .or_else(|| creds.refresh_token.clone()),
         expires_at,
         scopes,
         subscription_type: creds.subscription_type.clone(),
@@ -140,13 +141,12 @@ struct UsageWindowPayload {
 }
 
 fn parse_iso(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
 }
 
-async fn fetch_usage(
-    client: &reqwest::Client,
-    access_token: &str,
-) -> Result<UsageResponse> {
+async fn fetch_usage(client: &reqwest::Client, access_token: &str) -> Result<UsageResponse> {
     let response = client
         .get(USAGE_ENDPOINT)
         .bearer_auth(access_token)
