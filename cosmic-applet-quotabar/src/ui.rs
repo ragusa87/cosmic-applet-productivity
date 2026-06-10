@@ -74,10 +74,7 @@ fn provider_card(snapshot: &ProviderSnapshot) -> Element<'_, Message> {
     col = col.push(bar_row("DAILY", snapshot.short.as_ref(), now));
     col = col.push(bar_row("WEEKLY", snapshot.weekly.as_ref(), now));
 
-    container(col)
-        .width(Length::Fill)
-        .padding(2)
-        .into()
+    container(col).width(Length::Fill).padding(2).into()
 }
 
 fn worst_badge(snapshot: &ProviderSnapshot) -> String {
@@ -102,7 +99,12 @@ fn bar_row<'a>(
     );
     let reset_text = window
         .and_then(|w| w.resets_at)
-        .map(|r| format!("in {}", short_duration(r.signed_duration_since(now).num_seconds())))
+        .map(|r| {
+            format!(
+                "in {}",
+                short_duration(r.signed_duration_since(now).num_seconds())
+            )
+        })
         .unwrap_or_default();
 
     let used = window.map_or(0.0, |w| w.used_percent);
@@ -114,10 +116,7 @@ fn bar_row<'a>(
         .align_y(Alignment::Center)
         .spacing(10)
         .width(Length::Fixed(ROW_WIDTH))
-        .push(
-            text::caption(label)
-                .width(Length::Fixed(56.0)),
-        )
+        .push(text::caption(label).width(Length::Fixed(56.0)))
         .push(bar)
         .push(
             text::caption(pct_text)
@@ -229,4 +228,3 @@ fn bar_color(used_percent: f64) -> Color {
         Color::from_rgb(0.13, 0.77, 0.37)
     }
 }
-

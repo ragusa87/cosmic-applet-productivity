@@ -82,8 +82,8 @@ impl cosmic::Application for AppModel {
 
     fn view(&self) -> Element<'_, Self::Message> {
         use cosmic::applet::cosmic_panel_config::PanelAnchor;
-        use cosmic::iced::widget::Row;
         use cosmic::iced::Length;
+        use cosmic::iced::widget::Row;
 
         let is_horizontal = matches!(
             self.core.applet.anchor,
@@ -107,9 +107,7 @@ impl cosmic::Application for AppModel {
             .align_y(cosmic::iced::Alignment::Center)
             .spacing(6)
             .push(icon);
-        if is_horizontal
-            && let Some(text_str) = label_text
-        {
+        if is_horizontal && let Some(text_str) = label_text {
             row = row.push(
                 cosmic::widget::text(text_str)
                     .size(label_size)
@@ -246,11 +244,11 @@ fn sigusr2_subscription() -> Subscription<Message> {
     Subscription::run(sigusr2_stream)
 }
 
-async fn refresh_all(
-    client: &reqwest::Client,
-) -> (Vec<ProviderSnapshot>, Vec<RefreshError>) {
-    let (anth, oai) =
-        tokio::join!(anthropic::fetch_snapshot(client), openai::fetch_snapshot(client));
+async fn refresh_all(client: &reqwest::Client) -> (Vec<ProviderSnapshot>, Vec<RefreshError>) {
+    let (anth, oai) = tokio::join!(
+        anthropic::fetch_snapshot(client),
+        openai::fetch_snapshot(client)
+    );
 
     let mut snapshots = Vec::new();
     let mut errors = Vec::new();
