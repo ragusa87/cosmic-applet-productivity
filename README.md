@@ -10,9 +10,9 @@ usage in the panel:
 |---|---|---|---|
 | [Gmail Unread](#gmail-applet) | `cosmic-applet-gmail` | Number of unread Gmail messages, refreshed periodically. |![gmail-preview.png](cosmic-applet-gmail/gmail-preview.png)|
 | [Next meeting](#google-agenda-applet) | `cosmic-applet-google-agenda` | Next Google Calendar event with a live countdown, plus a desktop notification a few minutes before it starts. |![calendar-preview.png](cosmic-applet-google-agenda/calendar-preview.png)|
-| [Taxi tracker](#taxi-tracker-applet) | `cosmic-applet-taxi` | Multi-timer time tracking with daily auto-export to `taxi` (e.g. Liip's Zebra). | |
-| [Slack Unread](#slack-applet) | `cosmic-applet-slack` | Badge mirroring Slack's tray-icon ToolTip — pulled over DBus, no Slack API, no token. | |
-| [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project, MIT-licensed. | |
+| [Taxi tracker](#taxi-tracker-applet) | `cosmic-applet-taxi` | Multi-timer time tracking with daily auto-export to `taxi` (e.g. Liip's Zebra). |![taxi-preview.png](cosmic-applet-taxi/taxi-preview.png)|
+| [Slack Unread](#slack-applet) | `cosmic-applet-slack` | Badge mirroring Slack's tray-icon ToolTip — pulled over DBus, no Slack API, no token. |![slack-preview.png](cosmic-applet-slack/slack-preview.png)|
+| [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project, MIT-licensed. |![quotabar-preview.png](cosmic-applet-quotabar/quotabar-preview.png)|
 
 The two Google-backed applets follow the same model:
 

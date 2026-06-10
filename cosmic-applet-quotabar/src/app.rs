@@ -95,8 +95,10 @@ impl cosmic::Application for AppModel {
         let icon_px = f32::from(icon_size);
         let label_size = (icon_px * 0.55).round();
 
-        let icon = cosmic::widget::icon(cosmic::widget::icon::from_svg_bytes(ICON_SVG.to_vec()))
-            .size(icon_size);
+        let icon = cosmic::widget::icon(
+            cosmic::widget::icon::from_svg_bytes(ICON_SVG.to_vec()).symbolic(true),
+        )
+        .size(icon_size);
 
         let worst = worst_used_percent(&self.snapshots);
         let label_text = worst.map(|w| format!("{}%", round_pct(w)));
