@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::models::{Provider, ProviderSnapshot, UsageWindow};
 
@@ -13,26 +13,26 @@ const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const ANTHROPIC_BETA: &str = "oauth-2025-04-20";
 const USER_AGENT: &str = "claude-code/2.1.112";
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct CredentialEnvelope {
     #[serde(rename = "claudeAiOauth")]
     claude_ai_oauth: ClaudeOAuthCredentials,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ClaudeOAuthCredentials {
     #[serde(rename = "accessToken")]
     access_token: String,
-    #[serde(rename = "refreshToken", default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "refreshToken", default)]
     refresh_token: Option<String>,
     /// Milliseconds since epoch, matching Claude Code's on-disk format.
-    #[serde(rename = "expiresAt", default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "expiresAt", default)]
     expires_at: Option<i64>,
     #[serde(default)]
     scopes: Vec<String>,
-    #[serde(rename = "subscriptionType", default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "subscriptionType", default)]
     subscription_type: Option<String>,
-    #[serde(rename = "rateLimitTier", default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rateLimitTier", default)]
     rate_limit_tier: Option<String>,
 }
 
@@ -58,18 +58,6 @@ fn load_credentials() -> Result<ClaudeOAuthCredentials> {
     let env: CredentialEnvelope = serde_json::from_slice(&data)
         .with_context(|| format!("parse {}", path.display()))?;
     Ok(env.claude_ai_oauth)
-}
-
-fn save_credentials(creds: &ClaudeOAuthCredentials) -> Result<()> {
-    let path = credentials_path()?;
-    let env = CredentialEnvelope {
-        claude_ai_oauth: creds.clone(),
-    };
-    let serialized = serde_json::to_vec_pretty(&env)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serialized)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,9 +180,6 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
 
     if creds.is_expired() {
         creds = refresh(client, &creds).await?;
-        if let Err(e) = save_credentials(&creds) {
-            tracing::warn!(error = %e, "failed to persist refreshed Anthropic credentials");
-        }
     }
 
     let usage = match fetch_usage(client, &creds.access_token).await {
@@ -207,9 +192,6 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
                 return Err(e);
             }
             creds = refresh(client, &creds).await?;
-            if let Err(e) = save_credentials(&creds) {
-                tracing::warn!(error = %e, "failed to persist refreshed Anthropic credentials");
-            }
             fetch_usage(client, &creds.access_token).await?
         }
     };
