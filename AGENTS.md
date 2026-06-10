@@ -5,10 +5,12 @@ user-facing doc; this file is the *contributor*-facing one.
 
 ## What this is
 
-A Cargo workspace bundling four COSMIC desktop panel applets — two share
+A Cargo workspace bundling five COSMIC desktop panel applets — two share
 OAuth + Secret Service plumbing for Google APIs, the third is a standalone
 time tracker, the fourth is a read-only DBus reflector for Slack's tray
-icon:
+icon, the fifth is an MIT-licensed Rust port of the Swift
+[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project (AI API
+quota bar):
 
 - **`cosmic-applet-gmail`** — Gmail unread count, polls every N seconds.
 - **`cosmic-applet-google-agenda`** — Next Google Calendar event with a live
@@ -22,12 +24,19 @@ icon:
   of the `ToolTip` property's title text, subscribes to `NewToolTip` +
   `NameOwnerChanged` for instant updates. No OAuth, no Google, no token,
   no config.
+- **`cosmic-applet-quotabar`** — OpenAI + Anthropic API quota bar. Reads
+  the local OAuth sessions Claude Code and Codex CLIs already maintain
+  (`~/.claude/.credentials.json`, `~/.codex/auth.json`), refreshes them
+  when expired, and hits each provider's usage endpoint. Port of the
+  Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project
+  by Jonathan M.; **MIT-licensed** (the rest of the workspace is
+  GPL-3.0-or-later) — preserve that exception when editing this crate.
 - **`cosmic-google-common`** — shared library crate (gmail + agenda only)
   exporting the OAuth2 PKCE flow (`auth`) and the keyring-backed token
-  store (`secrets`). The taxi and slack applets do not depend on this
-  crate.
+  store (`secrets`). The taxi, slack, and quotabar applets do not depend
+  on this crate.
 
-All four applets are written in Rust on libcosmic / iced and follow the
+All five applets are written in Rust on libcosmic / iced and follow the
 "one binary, multiple modes" shape; see
 [Two modes, not two binaries](#two-modes-not-two-binaries) below.
 
@@ -36,9 +45,9 @@ All four applets are written in Rust on libcosmic / iced and follow the
 ```
 cosmic-applet-google/
 ├── Cargo.toml                         # workspace root + workspace.dependencies
-├── justfile                           # build/install/uninstall all four applets
+├── justfile                           # build/install/uninstall all five applets
 ├── rust-toolchain.toml                # channel = stable
-├── LICENSE.md                         # GPL-3.0-or-later + icon attribution
+├── LICENSE.md                         # GPL-3.0-or-later (+ MIT exception for quotabar) + icon attribution
 │
 ├── cosmic-google-common/
 │   ├── Cargo.toml
@@ -67,10 +76,16 @@ cosmic-applet-google/
 │   └── src/                           # main / app / settings / export / ui /
 │                                      # config / state / sessions / taxi / lock
 │
-└── cosmic-applet-slack/               # Slack unread badge (see below)
-    ├── Cargo.toml                     # NO dep on cosmic-google-common, no HTTP client
-    ├── data/                          # .desktop + icon (downloaded from svgrepo)
-    └── src/                           # main / app / ui / slack / debug
+├── cosmic-applet-slack/               # Slack unread badge (see below)
+│   ├── Cargo.toml                     # NO dep on cosmic-google-common, no HTTP client
+│   ├── data/                          # .desktop + icon (downloaded from svgrepo)
+│   └── src/                           # main / app / ui / slack / debug
+│
+└── cosmic-applet-quotabar/            # AI API quota bar (see below)
+    ├── Cargo.toml                     # license = "MIT" (override of workspace GPL); NO dep on cosmic-google-common
+    ├── LICENSE                        # MIT text + upstream copyright (Jonathanm10)
+    ├── data/                          # .desktop + bar-chart icon
+    └── src/                           # main / app / ui / models / anthropic / openai
 ```
 
 ## Two modes, not two binaries
@@ -82,15 +97,15 @@ sub-surface embedded in the panel. Real toplevels with WM chrome require
 process, but a single binary can dispatch to either based on `argv` — which
 saves maintaining two installs and two `.desktop` files per applet.
 
-All four applets do this:
+All five applets do this:
 
 | Mode | Entry | Surface | Trigger |
 |---|---|---|---|
 | Panel applet | `cosmic::applet::run::<AppModel>(())` | transparent sub-surface | default — no flag |
 | Settings window | `cosmic::app::run::<SettingsApp>(...)` | regular xdg_toplevel | `--show-settings` |
 
-(The Slack applet has no settings — nothing to configure — so it only
-implements the panel mode and the `--debug` CLI mode below.)
+(The Slack and QuotaBar applets have no settings — nothing to configure —
+so they only implement the panel mode and the `--debug` CLI mode below.)
 
 The agenda binary adds two extra `argv`-selected modes (no iced involved):
 
@@ -111,9 +126,17 @@ The slack binary adds one extra mode:
 |---|---|---|---|
 | CLI debug dump | `debug::run()` (tokio **multi-thread** runtime — zbus needs the reactor on a separate thread or the property reads hang) | stdout only | `--debug` |
 
+The quotabar binary adds one extra mode:
+
+| Mode | Entry | Surface | Trigger |
+|---|---|---|---|
+| CLI debug dump | `debug_dump()` (tokio current-thread runtime) | stdout only | `--debug` — prints one `ProviderSnapshot` per provider, or the underlying error string |
+
 The applet's right-click menu → **Credentials…** spawns `current_exe()` with
 `--show-settings`, which is how the user reaches the OAuth setup. The Slack
-applet's right-click menu has only a **Refresh** entry.
+and QuotaBar applets' right-click menus have only a **Refresh** entry —
+neither owns any OAuth client (Slack reads DBus; QuotaBar reuses the
+Claude Code / Codex sessions that already exist on disk).
 
 ## Shared OAuth + Secrets crate
 
@@ -152,13 +175,16 @@ triggers an immediate refetch. No IPC.
 
 ## SIGUSR2 → force refresh
 
-All four applets listen for SIGUSR2 (subscription in
+All five applets listen for SIGUSR2 (subscription in
 `src/app.rs::sigusr2_stream`, built on `tokio::signal::unix`). On receipt:
 
 - **gmail / agenda** → reload tokens from Secret Service → immediate fetch.
 - **taxi** → reload `state.json` from disk → re-detect `uv` availability.
 - **slack** → wake `slack::REFRESH_NOTIFY` (process-wide `LazyLock<Notify>`)
   → the DBus subscription's inner `select!` re-reads the `ToolTip` property.
+- **quotabar** → emit `Message::Refresh` → re-read both local OAuth files
+  and refetch each provider's usage endpoint (debounced: skipped if a
+  refresh is already in flight).
 
 The settings mode installs `SIG_IGN` for SIGUSR2 at startup so
 `pkill -USR2 cosmic-applet-…` (which would match both modes' processes by
@@ -680,16 +706,135 @@ src/
                     No GUI.
 ```
 
+### cosmic-applet-quotabar
+
+- **APP_ID**: `com.github.ragusa87.CosmicAppletQuotaBar`
+- **License**: **MIT** (Cargo.toml override; the workspace default is
+  GPL-3.0-or-later). Matches upstream
+  [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) by
+  Jonathan M. The MIT text + both copyrights live in
+  `cosmic-applet-quotabar/LICENSE`; the workspace `LICENSE.md` documents
+  the per-crate exception. **Do not** flip this crate to GPL or change
+  the `license` field without coordinating with the upstream author.
+- **Provenance**: Rust port of `mr-chatter` (formerly `QuotaBar`), a
+  Swift / SwiftUI macOS menu-bar app. The mapping is direct:
+  Swift `QuotaBarCore::AnthropicProvider` → `src/anthropic.rs`,
+  `QuotaBarCore::OpenAIProvider` → `src/openai.rs`,
+  `QuotaBarCore::Models` → `src/models.rs`, `QuotaBarApp::DashboardView`
+  → `src/ui.rs`. Endpoints, OAuth client IDs, and the `anthropic-beta` /
+  `User-Agent` headers are copied verbatim from the Swift sources.
+- **No keyring entry, no config, no `cosmic-google-common`.** All state
+  is what Claude Code / Codex already store on disk; QuotaBar only adds
+  a 5-minute timer + a popup.
+- **Credential sources** (read on every refresh):
+  - **Anthropic**: `~/.claude/.credentials.json` — JSON envelope
+    `{ "claudeAiOauth": { accessToken, refreshToken, expiresAt (ms since
+    epoch), scopes, subscriptionType, rateLimitTier } }`. When expired
+    (`expires_at_ms <= now_ms`), the applet POSTs to
+    `https://platform.claude.com/v1/oauth/token` with
+    `grant_type=refresh_token` + the hardcoded client ID
+    `9d1c250a-e61b-44d9-88ed-5944d1962f5e` (Claude Code's), then writes
+    the new envelope back atomically (`<file>.tmp` + `rename`). On a
+    401 from the usage endpoint, it refreshes once and retries — same
+    pattern as the Swift original.
+  - **OpenAI**: `~/.codex/auth.json` — Codex CLI's auth file. If the
+    file's `OPENAI_API_KEY` field is non-empty, the applet rejects it
+    (the ChatGPT usage endpoint requires an OAuth session, not an API
+    key — matches Swift's behavior). Refresh is proactive when
+    `last_refresh` is older than 7 days, or reactive on 401, via
+    `https://auth.openai.com/oauth/token` with client ID
+    `app_EMoamEEZ73f0CkXaXp7hrann` (Codex CLI's). Refreshed token +
+    `last_refresh` ISO timestamp are written back to `auth.json` via
+    the same atomic-rename pattern; **other fields in the file are
+    preserved bit-for-bit** (we mutate the parsed JSON in place rather
+    than re-serializing our own struct, because Codex puts other keys
+    in there we don't model).
+- **Usage endpoints**:
+  - Anthropic: `GET https://api.anthropic.com/api/oauth/usage` with
+    `Authorization: Bearer …`, `anthropic-beta: oauth-2025-04-20`,
+    `User-Agent: claude-code/2.1.112`. Response has `five_hour` and
+    `seven_day` objects with `utilization` (0..100 percent) and
+    `resets_at` (RFC3339).
+  - OpenAI: `GET https://chatgpt.com/backend-api/wham/usage` with
+    `Authorization: Bearer …`, optional `ChatGPT-Account-Id` header
+    (from `tokens.account_id`). Response has `rate_limit.primary_window`
+    and `rate_limit.secondary_window`, each with `used_percent`
+    (0..100) and `reset_at` (unix seconds).
+- **Refresh cadence**: 5-minute timer + manual triggers (popup
+  Refresh button, right-click menu, SIGUSR2). The
+  `AppModel::refreshing: bool` flag debounces overlapping triggers; a
+  new `Message::Refresh` while one is in flight is dropped silently.
+- **Concurrency**: both providers fetch in parallel via
+  `tokio::join!`. Failures are recorded per-provider in
+  `AppModel::errors: Vec<RefreshError>` and rendered as inline banners
+  in the popup — one provider failing never blanks the other.
+- **Panel button rendering**: icon + worst-used `N%` label (max of all
+  available `used_percent` values across `(provider, window)` pairs).
+  When no snapshot is available yet, the label is omitted — the bar-
+  chart icon is still shown so the panel item is clickable.
+- **Popup**: per-provider card with two `canvas::Program`
+  horizontal bars (Daily = 5h, Weekly = 7d). The fill color steps
+  through green → amber → orange → red at 50 / 75 / 90 %. The
+  rightmost column shows the time until reset (`in Nh / Nd`), parsed
+  out of the provider's `resets_at` field.
+- **Files**:
+
+```
+src/
+├── main.rs         argv → applet::run or debug_dump() (--debug, tokio
+│                   current-thread runtime; prints one Snapshot per
+│                   provider or the per-provider error string)
+├── app.rs          panel applet — Application impl, panel button view,
+│                   info popup (bars) + menu popup (Refresh), 5-minute
+│                   timer + SIGUSR2 + manual refresh, refreshing debounce
+├── ui.rs           dashboard_view (provider cards + bars + footer),
+│                   menu_view (Refresh), BarProgram canvas, color steps
+├── models.rs       Provider enum + UsageWindow + ProviderSnapshot +
+│                   RefreshError; ProviderSnapshot::worst_used()
+├── anthropic.rs    load_credentials / save_credentials / refresh /
+│                   fetch_usage / fetch_snapshot + http_client()
+└── openai.rs       load_credentials / save_refreshed (preserves
+                    unknown JSON fields) / refresh / fetch_usage /
+                    fetch_snapshot
+```
+
+#### When editing this crate
+
+- **Treat upstream as the spec.** The endpoints, headers, client IDs,
+  refresh semantics, and JSON shape decisions all come from
+  [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter). When in
+  doubt about how a corner case should behave (e.g. how to merge a
+  401 retry with a proactive refresh), check the Swift sources first.
+  Drifting behavior is a port bug, not a feature.
+- **Preserve the MIT license header** in `cosmic-applet-quotabar/LICENSE`
+  (both copyright notices) and the `license = "MIT"` line in this
+  crate's `Cargo.toml`. Do not flip it to `license.workspace = true`.
+- **Atomic credential writes only.** Both providers use
+  `<file>.tmp` + `rename(2)` to avoid leaving a half-written
+  credentials file if the process dies mid-write. Don't replace this
+  with a plain `std::fs::write` — Claude Code and Codex are *also*
+  reading/writing these files; a torn write would brittle them.
+- **Don't add a keyring layer.** The whole point of QuotaBar is that
+  there is no per-app credential setup — the applet rides on the
+  sessions Claude Code and Codex already maintain. If you want a
+  keyring-backed copy, build a separate crate and import it; do not
+  drag `cosmic-google-common` into here.
+- **Don't reuse the Google applets' OAuth scopes / flows.** This crate
+  refreshes pre-existing third-party (Anthropic / OpenAI) tokens; it
+  never runs an authorization-code flow. Keep
+  `cosmic-google-common` out of `Cargo.toml`.
+
 ## Build / run / test commands
 
 ```sh
 just check                   # cargo clippy --workspace --all-features
-just build-release           # cargo build --release (all four binaries)
+just build-release           # cargo build --release (all five binaries)
 just install-user            # ~/.local/{bin,share/applications,share/icons/...}
 just run-gmail               # cargo run -p cosmic-applet-gmail (panel, headless)
 just run-agenda              # cargo run -p cosmic-applet-google-agenda
 just run-taxi                # cargo run -p cosmic-applet-taxi
 just run-slack               # cargo run -p cosmic-applet-slack
+just run-quotabar            # cargo run -p cosmic-applet-quotabar
 cargo test --workspace       # state/sessions/taxi/gmail/agenda unit tests
 ```
 
@@ -717,6 +862,11 @@ cosmic-applet-…` and the panel respawns it. Then:
   prints each Slack-owned connection's PID/comm/tooltip/parse-decision,
   no GUI. `RUST_LOG=cosmic_applet_slack=debug just run-slack` streams
   per-fetch parse logging at runtime.
+- quotabar only: `cosmic-applet-quotabar --debug` → reads
+  `~/.claude/.credentials.json` + `~/.codex/auth.json`, hits both
+  usage endpoints once, prints the parsed `ProviderSnapshot` (or the
+  per-provider error string when a fetch fails — missing creds,
+  expired refresh token, HTTP non-2xx, etc.), no GUI.
 
 ## Conventions (applies to all crates)
 
@@ -809,3 +959,15 @@ cosmic-applet-…` and the panel respawns it. Then:
 - Don't make the Slack `--debug` CLI use a `current_thread` tokio
   runtime. zbus 5's tokio backend needs the reactor on a separate
   thread or property reads hang under it. Keep `new_multi_thread()`.
+- Don't flip `cosmic-applet-quotabar` from MIT to the workspace's
+  GPL-3.0-or-later license, and don't switch its `Cargo.toml` `license`
+  field to `license.workspace = true`. That crate is a port of
+  [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter), which is
+  MIT — relicensing the port unilaterally would breach upstream's
+  terms. Keep the per-crate MIT license + the upstream copyright
+  notice in `cosmic-applet-quotabar/LICENSE`.
+- Don't add OAuth flows, API keys, keyring usage, or `cosmic-google-common`
+  to `cosmic-applet-quotabar`. The whole point of the crate is to ride
+  on the OAuth sessions Claude Code (`~/.claude/.credentials.json`) and
+  Codex (`~/.codex/auth.json`) already keep on disk. If a feature would
+  require new credentials, it doesn't belong here.

@@ -6,6 +6,7 @@ members = [
     "cosmic-applet-google-agenda",
     "cosmic-applet-taxi",
     "cosmic-applet-slack",
+    "cosmic-applet-quotabar",
 ]
 
 [workspace.package]
