@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+  <!-- Workspace grid (2x2) -->
+  <rect x="2" y="2" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+  <rect x="13" y="2" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+  <rect x="2" y="13" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+  <rect x="13" y="13" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+  <!-- Highlighted target workspace (bottom-right) -->
+  <rect x="13" y="13" width="9" height="9" rx="1" fill="currentColor" opacity="0.25"/>
+  <!-- Window placed inside target -->
+  <rect x="15" y="16" width="5" height="4" rx="0.6" fill="currentColor"/>
+  <!-- Arrow from top-left to highlighted target -->
+  <path d="M 5.5 5.5 L 16 16" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  <path d="M 14 14.5 L 16 16 L 14.5 14" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Window Rules
+Comment=Assign windows to workspaces by app id on first appearance
+Exec=cosmic-applet-windowrules
+Icon=com.github.ragusa87.CosmicAppletWindowRules
+Terminal=false
+Categories=COSMIC;X-COSMIC-Applet;
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=2

@@ -7,6 +7,7 @@ members = [
     "cosmic-applet-taxi",
     "cosmic-applet-slack",
     "cosmic-applet-quotabar",
+    "cosmic-applet-windowrules",
 ]
 
 [workspace.package]
@@ -41,6 +42,13 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 libcosmic = { git = "https://github.com/pop-os/libcosmic.git", default-features = false, features = ["applet", "applet-token", "dbus-config", "multi-window", "tokio", "wayland", "winit"] }
 cosmic-config = { git = "https://github.com/pop-os/libcosmic.git", package = "cosmic-config" }
 cosmic-config-derive = { git = "https://github.com/pop-os/libcosmic.git", package = "cosmic-config-derive" }
+
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols.git", default-features = false, features = ["client"] }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols.git" }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+smithay-client-toolkit = "0.20"
+bitflags = "2"
 
 cosmic-google-common = { path = "cosmic-google-common" }
 
