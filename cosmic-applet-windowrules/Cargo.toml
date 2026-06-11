@@ -1,0 +1,34 @@
+[package]
+name = "cosmic-applet-windowrules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "COSMIC panel applet — assign windows to workspaces by app id"
+repository = "https://github.com/ragusa87/cosmic-applet-windowrules"
+
+[[bin]]
+name = "cosmic-applet-windowrules"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+futures-util = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+zbus = { workspace = true }
+
+libcosmic = { workspace = true }
+cosmic-config = { workspace = true }
+cosmic-config-derive = { workspace = true }
+
+cosmic-protocols = { workspace = true }
+cosmic-client-toolkit = { workspace = true }
+wayland-client = { workspace = true }
+wayland-protocols = { workspace = true }
+smithay-client-toolkit = { workspace = true }
+bitflags = { workspace = true }

@@ -5,12 +5,12 @@ user-facing doc; this file is the *contributor*-facing one.
 
 ## What this is
 
-A Cargo workspace bundling five COSMIC desktop panel applets — two share
-OAuth + Secret Service plumbing for Google APIs, the third is a standalone
-time tracker, the fourth is a read-only DBus reflector for Slack's tray
-icon, the fifth is an MIT-licensed Rust port of the Swift
-[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project (AI API
-quota bar):
+A Cargo workspace bundling several COSMIC desktop panel applets — some
+share OAuth + Secret Service plumbing for Google APIs, others are
+standalone (a time tracker, a read-only DBus reflector for Slack's tray
+icon, an MIT-licensed Rust port of the Swift
+[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project for
+AI API quota tracking, and more):
 
 - **`cosmic-applet-gmail`** — Gmail unread count, polls every N seconds.
 - **`cosmic-applet-google-agenda`** — Next Google Calendar event with a live
@@ -31,12 +31,22 @@ quota bar):
   Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project
   by Jonathan M.; **MIT-licensed** (the rest of the workspace is
   GPL-3.0-or-later) — preserve that exception when editing this crate.
+- **`cosmic-applet-windowrules`** — KDE-style window→workspace rules,
+  scoped down to "send windows matching this `app_id` to this workspace
+  on first appearance." Talks directly to `cosmic-protocols` /
+  `cosmic-client-toolkit` over a dedicated calloop-on-a-thread Wayland
+  connection (separate from libcosmic's own connection). Uses
+  `ext-foreign-toplevel-list-v1` + `zcosmic_toplevel_manager_v1::move_to_ext_workspace`,
+  `ext-workspace-v1::activate`, and `zcosmic_workspace_handle_v2::pin`.
+  Workspace ops must be followed by `ext_workspace_manager_v1.commit()`
+  to take effect — easy to forget; see `pin_workspace` /
+  `activate_workspace`. No OAuth.
 - **`cosmic-google-common`** — shared library crate (gmail + agenda only)
   exporting the OAuth2 PKCE flow (`auth`) and the keyring-backed token
-  store (`secrets`). The taxi, slack, and quotabar applets do not depend
-  on this crate.
+  store (`secrets`). The taxi, slack, quotabar, and windowrules applets
+  do not depend on this crate.
 
-All five applets are written in Rust on libcosmic / iced and follow the
+Every applet is written in Rust on libcosmic / iced and follows the
 "one binary, multiple modes" shape; see
 [Two modes, not two binaries](#two-modes-not-two-binaries) below.
 
@@ -81,11 +91,17 @@ cosmic-applet-productivity/
 │   ├── data/                          # .desktop + icon (downloaded from svgrepo)
 │   └── src/                           # main / app / ui / slack / debug
 │
-└── cosmic-applet-quotabar/            # AI API quota bar (see below)
-    ├── Cargo.toml                     # license = "MIT" (override of workspace GPL); NO dep on cosmic-google-common
-    ├── LICENSE                        # MIT text + upstream copyright (Jonathanm10)
-    ├── data/                          # .desktop + bar-chart icon
-    └── src/                           # main / app / ui / models / anthropic / openai
+├── cosmic-applet-quotabar/            # AI API quota bar (see below)
+│   ├── Cargo.toml                     # license = "MIT" (override of workspace GPL); NO dep on cosmic-google-common
+│   ├── LICENSE                        # MIT text + upstream copyright (Jonathanm10)
+│   ├── data/                          # .desktop + bar-chart icon
+│   └── src/                           # main / app / ui / models / anthropic / openai
+│
+└── cosmic-applet-windowrules/         # Window-Rules applet (see below)
+    ├── Cargo.toml                     # depends on cosmic-protocols + cosmic-client-toolkit; NO dep on cosmic-google-common
+    ├── data/                          # .desktop + workspace-grid icon
+    └── src/                           # main / app / settings / models / config /
+                                       # wayland / debug
 ```
 
 ## Two modes, not two binaries
@@ -97,7 +113,7 @@ sub-surface embedded in the panel. Real toplevels with WM chrome require
 process, but a single binary can dispatch to either based on `argv` — which
 saves maintaining two installs and two `.desktop` files per applet.
 
-All five applets do this:
+Every applet does this:
 
 | Mode | Entry | Surface | Trigger |
 |---|---|---|---|
@@ -175,7 +191,7 @@ triggers an immediate refetch. No IPC.
 
 ## SIGUSR2 → force refresh
 
-All five applets listen for SIGUSR2 (subscription in
+Every applet listens for SIGUSR2 (subscription in
 `src/app.rs::sigusr2_stream`, built on `tokio::signal::unix`). On receipt:
 
 - **gmail / agenda** → reload tokens from Secret Service → immediate fetch.

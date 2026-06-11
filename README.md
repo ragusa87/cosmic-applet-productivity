@@ -5,11 +5,11 @@
 > credentials before relying on it, and treat the code as a starting
 > point rather than production-grade software.
 
-Five COSMIC desktop panel applets — two that surface bits of your Google
+A bundle of COSMIC desktop panel applets — two that surface bits of your Google
 account, one that tracks time and exports to a [taxi](https://github.com/sephii/taxi)
 timesheet, one that mirrors the Slack tray-icon unread count by reading
-its DBus tooltip, and one that surfaces your OpenAI + Anthropic AI API
-usage in the panel:
+its DBus tooltip, one that surfaces your OpenAI + Anthropic AI API
+usage, and one that assigns windows to workspaces by App ID, in the panel:
 
 | Applet | Binary | What it shows | Icon |
 |---|---|---|---|
@@ -18,6 +18,7 @@ usage in the panel:
 | [Taxi tracker](#taxi-tracker-applet) | `cosmic-applet-taxi` | Multi-timer time tracking with daily auto-export to `taxi` (e.g. Liip's Zebra). |![taxi-preview.png](cosmic-applet-taxi/taxi-preview.png)|
 | [Slack Unread](#slack-applet) | `cosmic-applet-slack` | Badge mirroring Slack's tray-icon ToolTip — pulled over DBus, no Slack API, no token. |![slack-preview.png](cosmic-applet-slack/slack-preview.png)|
 | [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project, MIT-licensed. |![quotabar-preview.png](cosmic-applet-quotabar/quotabar-preview.png)|
+| [Window Rules](#windowrules-applet) | `cosmic-applet-windowrules` | Assigns windows to a chosen workspace by `app_id` on first appearance — COSMIC counterpart of KDE's KWin Window Rules. |![windowrules-preview.png](cosmic-applet-windowrules/windowrules-preview.png)|
 
 The two Google-backed applets follow the same model:
 
@@ -34,17 +35,16 @@ The two Google-backed applets follow the same model:
   so adding more Google-backed applets later only requires implementing the
   applet-specific UI and API call.
 
-The third applet, `cosmic-applet-taxi`, is unrelated to Google — it tracks
-local time and pushes merged + rounded sessions to your `~/zebra/%Y/%m.tks`
-timesheet via the `taxi` CLI (invoked through `uv run`).
+`cosmic-applet-taxi` is unrelated to Google — it tracks local time and
+pushes merged + rounded sessions to your `~/zebra/%Y/%m.tks` timesheet
+via the `taxi` CLI (invoked through `uv run`).
 
-The fourth applet, `cosmic-applet-slack`, is also unrelated to Google — it
-queries the session bus for Slack's `StatusNotifierItem` and parses the
-unread count out of the tooltip text. No OAuth, no Slack API, no token; it
-just mirrors whatever Slack already publishes to the desktop's tray
-protocol.
+`cosmic-applet-slack` is also unrelated to Google — it queries the
+session bus for Slack's `StatusNotifierItem` and parses the unread count
+out of the tooltip text. No OAuth, no Slack API, no token; it just
+mirrors whatever Slack already publishes to the desktop's tray protocol.
 
-The fifth applet, `cosmic-applet-quotabar`, is a Rust / libcosmic port of
+`cosmic-applet-quotabar` is a Rust / libcosmic port of
 [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) (the project
 formerly known as `QuotaBar`). It reads the OAuth sessions that
 [Claude Code](https://claude.com/claude-code) and
@@ -60,15 +60,18 @@ session. On Pop!_OS / COSMIC the Secret Service backend is gnome-keyring;
 it must be running for either applet to remember credentials.
 
 ```sh
-just release             # release build + user install into ~/.local for all five applets
+just release             # release build + user install into ~/.local for every applet
                          # (use `sudo just install-system` after this for /usr)
 ```
 
 `just release` lays each applet's binary, desktop entry, and icon into:
 
-- `~/.local/bin/cosmic-applet-{gmail,google-agenda,taxi,slack,quotabar}`
-- `~/.local/share/applications/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi,Slack,QuotaBar}.desktop`
-- `~/.local/share/icons/hicolor/scalable/apps/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi,Slack,QuotaBar}.svg`
+- `~/.local/bin/<crate>`
+- `~/.local/share/applications/<AppId>.desktop`
+- `~/.local/share/icons/hicolor/scalable/apps/<AppId>.svg`
+
+…for every crate listed in [`Cargo.toml`](Cargo.toml)'s `[workspace]
+members` (the AppIds follow the pattern `com.github.ragusa87.CosmicApplet<CamelCaseName>`).
 
 > ⚠️ `~/.local/bin` must be on your `$PATH` — the panel runs the binary by
 > name (`Exec=cosmic-applet-gmail` etc.) and resolves it via `PATH`. Most
@@ -118,7 +121,7 @@ below, and right-click the new panel icon → **Credentials** to authorize.
 just uninstall-user       # or `sudo just uninstall-system` for /usr
 ```
 
-Removes the binary, desktop entry, and icon for **all five** applets.
+Removes the binary, desktop entry, and icon for **every** applet.
 
 ## One-time Google Cloud setup
 
@@ -181,7 +184,7 @@ pkill -USR2 -f cosmic-applet-slack            # re-read Slack tooltip right now
 pkill -USR2 -f cosmic-applet-quotabar         # refetch AI quotas right now
 ```
 
-Or, to signal all five at once:
+Or, to signal every applet at once:
 
 ```sh
 just refresh
@@ -497,6 +500,81 @@ Claude Code install, and/or `~/.codex/auth.json` from a logged-in
 Codex install. Both files are produced by `claude login` / `codex
 login` respectively; the applet never invokes those flows itself.
 
+## Window Rules applet
+
+`cosmic-applet-windowrules` is the COSMIC counterpart of KDE Plasma's
+**KWin Window Rules**, intentionally scoped down to the 80% case: *"when a
+window matching this App ID appears, send it to that workspace."*
+No OAuth, no API keys, no daemon — it just listens for new toplevels
+over `ext-foreign-toplevel-list-v1` and acts on them via
+`zcosmic_toplevel_manager_v1::move_to_ext_workspace`.
+
+**What you see** — the panel button shows a workspace-grid icon, and
+when at least one rule is enabled, a small numeric badge with the
+count. **Left-click** opens a status popup (enabled / total rules,
+last rule fired). **Right-click** opens a one-item menu with
+**Settings…**, which spawns the standalone rule editor as a regular
+Wayland toplevel (survives focus changes).
+
+**The rule editor** lets you:
+
+- **Pick a target window from a dropdown** of currently-open toplevels
+  — clicking one autofills the App ID, so you don't need to memorise
+  `org.mozilla.firefox` vs `Firefox` vs `firefox`. The list is a live
+  Wayland-side enumeration, not a guess.
+- Optionally filter by a case-insensitive **title substring**
+  (e.g. `Private` to send Firefox private windows to a different
+  workspace from regular ones).
+- Pick the **target workspace** from a dropdown, which shows every
+  workspace COSMIC currently exposes with its monitor name and a
+  `(pinned)` tag where applicable. Workspaces are output-disambiguated:
+  if you have a `"1"` on `eDP-1` and another `"1"` on `DP-4`, the rule
+  remembers which one you picked.
+- Toggle **"Switch to the chosen workspace"** if you want the rule to
+  also focus the destination after moving the window. Off by default.
+- Each saved rule has **Edit / Disable / Delete** buttons. The
+  rule-uniqueness check rejects two rules with the same
+  `(app_id, title_filter)` tuple — handy for catching "I created two
+  Spotify rules going to different workspaces" mistakes.
+
+**Pin your target workspaces** — COSMIC prunes unused workspaces
+dynamically (only the ones in active use plus one trailing extra
+exist at any moment). If your rule targets workspace `5` but
+workspace `5` was pruned before the matching window appears, the move
+silently does nothing. The editor includes an in-dialog tip and an
+**Open Workspaces overview** button; in the overview, hover the
+target's thumbnail and click the pin icon. Pinned workspaces survive
+both dynamic pruning and reboots.
+
+**Rule storage** — `cosmic-config` under `com.github.ragusa87.CosmicAppletWindowRules` (no
+secrets). The panel applet reloads the config from disk every time it
+sees a new toplevel, so edits in the settings window apply
+immediately without a restart.
+
+**Debugging what the panel sees** — stream every Wayland subscription
+event to stdout:
+
+```sh
+cosmic-applet-windowrules --debug
+```
+
+This prints capabilities, the workspace list (with `[pinned]` tags),
+the open toplevels (with their `app_id` and `title`), and every
+`new_toplevel` event as it fires. Useful when figuring out what
+`app_id` to put in a rule, or verifying that a workspace really is
+pinned.
+
+**Caveat** — cosmic-comp 1.0.x implements
+`move_to_ext_workspace` (the v4 toplevel-management request) but
+omits it from its hardcoded capability list. The applet detects this
+and attempts the request anyway with a one-time warning. Future
+cosmic-comp releases will likely advertise it correctly and the
+warning will go away on its own.
+
+**Requirements** — a recent COSMIC desktop (cosmic-comp ≥ 1.0
+exposing `ext-workspace-v1` + the v4 toplevel-management protocol).
+Nothing else.
+
 ## Troubleshooting
 
 - **Gmail panel shows `—` forever** → the applet has no credentials;
@@ -530,13 +608,14 @@ login` respectively; the applet never invokes those flows itself.
 ```
 cosmic-applet-productivity/
 ├── Cargo.toml                       # workspace root
-├── justfile                         # build/install/uninstall for all five applets
+├── justfile                         # build/install/uninstall for every applet
 ├── cosmic-google-common/            # shared OAuth2 + Secret Service helpers (gmail + agenda)
 ├── cosmic-applet-gmail/             # Gmail Unread applet
 ├── cosmic-applet-google-agenda/     # Next meeting applet
 ├── cosmic-applet-taxi/              # Time tracker + taxi/Zebra exporter
 ├── cosmic-applet-slack/             # Slack unread badge via DBus tray ToolTip
-└── cosmic-applet-quotabar/          # OpenAI + Anthropic API quota bar (MIT-licensed port of mr-chatter)
+├── cosmic-applet-quotabar/          # OpenAI + Anthropic API quota bar (MIT-licensed port of mr-chatter)
+└── cosmic-applet-windowrules/       # Assign windows to workspaces by app id on first appearance
 ```
 
 ## License
