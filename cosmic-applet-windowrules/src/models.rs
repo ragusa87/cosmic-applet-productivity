@@ -20,12 +20,25 @@ pub struct Rule {
     /// to the target. Default `false` so the window is moved silently.
     #[serde(default)]
     pub switch_to_workspace: bool,
+    /// Skip toplevels with an empty title. The cosmic/ext protocols don't
+    /// expose a parent/child or "is modal" flag, so empty-title is the only
+    /// signal we have for transient popups (e.g. JetBrains' search overlay
+    /// shares the IDE's app_id but has no title and shouldn't be moved).
+    #[serde(default = "default_skip_empty_title")]
+    pub skip_empty_title: bool,
     pub mode: ApplyMode,
+}
+
+fn default_skip_empty_title() -> bool {
+    true
 }
 
 impl Rule {
     pub fn matches(&self, app_id: &str, title: &str) -> bool {
         if !self.enabled {
+            return false;
+        }
+        if self.skip_empty_title && title.is_empty() {
             return false;
         }
         if self.app_id != app_id {
@@ -50,6 +63,7 @@ impl Rule {
             target,
             target_output: None,
             switch_to_workspace: false,
+            skip_empty_title: true,
             mode: ApplyMode::ApplyInitially,
         }
     }
@@ -107,6 +121,7 @@ mod tests {
             target: WorkspaceTarget::ByIndex(0),
             target_output: None,
             switch_to_workspace: false,
+            skip_empty_title: true,
             mode: ApplyMode::ApplyInitially,
         }
     }
@@ -114,15 +129,29 @@ mod tests {
     #[test]
     fn matches_exact_app_id() {
         let r = make_rule("firefox", None, true);
-        assert!(r.matches("firefox", ""));
-        assert!(!r.matches("Firefox", ""));
-        assert!(!r.matches("firefox-extra", ""));
+        assert!(r.matches("firefox", "Some Page"));
+        assert!(!r.matches("Firefox", "Some Page"));
+        assert!(!r.matches("firefox-extra", "Some Page"));
     }
 
     #[test]
     fn ignores_when_disabled() {
         let r = make_rule("firefox", None, false);
-        assert!(!r.matches("firefox", ""));
+        assert!(!r.matches("firefox", "Some Page"));
+    }
+
+    #[test]
+    fn skips_empty_title_by_default() {
+        let r = make_rule("jetbrains-idea", None, true);
+        assert!(!r.matches("jetbrains-idea", ""));
+        assert!(r.matches("jetbrains-idea", "Project — Main.rs"));
+    }
+
+    #[test]
+    fn empty_title_matches_when_skip_disabled() {
+        let mut r = make_rule("jetbrains-idea", None, true);
+        r.skip_empty_title = false;
+        assert!(r.matches("jetbrains-idea", ""));
     }
 
     #[test]
