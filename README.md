@@ -524,7 +524,7 @@ login` respectively; the applet never invokes those flows itself.
 ## Repository layout
 
 ```
-cosmic-applet-google/
+cosmic-applet-productivity/
 ├── Cargo.toml                       # workspace root
 ├── justfile                         # build/install/uninstall for all five applets
 ├── cosmic-google-common/            # shared OAuth2 + Secret Service helpers (gmail + agenda)
