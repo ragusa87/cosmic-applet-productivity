@@ -76,7 +76,6 @@ impl cosmic::Application for AppModel {
 
     fn view(&self) -> Element<'_, Self::Message> {
         use cosmic::applet::cosmic_panel_config::PanelAnchor;
-        use cosmic::iced::widget::Row;
         use cosmic::iced::widget::mouse_area;
 
         let is_horizontal = matches!(
@@ -86,29 +85,11 @@ impl cosmic::Application for AppModel {
 
         let (icon_size, _) = self.core.applet.suggested_size(true);
         let (pad_major, pad_minor) = self.core.applet.suggested_padding(true);
-        let icon_px = f32::from(icon_size);
-        let label_size = (icon_px * 0.55).round();
 
         let icon = cosmic::widget::icon(
             cosmic::widget::icon::from_svg_bytes(ICON_SVG.to_vec()).symbolic(true),
         )
         .size(icon_size);
-
-        let enabled = self.config.rules.iter().filter(|r| r.enabled).count();
-        let mut row = Row::new()
-            .align_y(cosmic::iced::Alignment::Center)
-            .spacing(6)
-            .push(icon);
-        if is_horizontal && enabled > 0 {
-            row = row.push(
-                cosmic::widget::text(format!("{enabled}"))
-                    .size(label_size)
-                    .height(Length::Fixed(icon_px))
-                    .align_y(cosmic::iced::alignment::Vertical::Center),
-            );
-        }
-
-        let content: Element<'_, Self::Message> = row.into();
 
         let (h_pad, v_pad) = if is_horizontal {
             (pad_major, pad_minor)
@@ -116,7 +97,7 @@ impl cosmic::Application for AppModel {
             (pad_minor, pad_major)
         };
 
-        let btn = button::custom(content)
+        let btn = button::custom(icon)
             .padding([v_pad, h_pad])
             .on_press(Message::LeftClick)
             .class(cosmic::theme::Button::AppletIcon);
