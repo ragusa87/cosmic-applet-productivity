@@ -8,6 +8,7 @@ use configparser::ini::Ini;
 use regex::Regex;
 use tokio::process::Command;
 
+use crate::atomic;
 use crate::config::Config;
 
 const TAXIRC_RELATIVE: &str = ".config/taxi/taxirc";
@@ -257,10 +258,8 @@ pub fn replace_day(
         payload.push('\n');
     }
 
-    let tmp = path.with_extension("tks.tmp");
-    std::fs::write(&tmp, payload.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+    atomic::write_preserving_mode(path, payload.as_bytes(), 0o644)
+        .with_context(|| format!("atomic write {}", path.display()))?;
     Ok(())
 }
 
@@ -351,10 +350,8 @@ fn append_day_at(
         payload.push('\n');
     }
 
-    let tmp = path.with_extension("tks.tmp");
-    std::fs::write(&tmp, payload.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+    atomic::write_preserving_mode(path, payload.as_bytes(), 0o644)
+        .with_context(|| format!("atomic write {}", path.display()))?;
     Ok(())
 }
 

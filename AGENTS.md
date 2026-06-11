@@ -727,30 +727,31 @@ src/
   is what Claude Code / Codex already store on disk; QuotaBar only adds
   a 5-minute timer + a popup.
 - **Credential sources** (read on every refresh):
-  - **Anthropic**: `~/.claude/.credentials.json` — Claude Code's
-    credential envelope, **read only**. JSON shape
+  - **Anthropic**: `~/.claude/.credentials.json` — JSON envelope
     `{ "claudeAiOauth": { accessToken, refreshToken, expiresAt (ms since
     epoch), scopes, subscriptionType, rateLimitTier } }`. When expired
     (`expires_at_ms <= now_ms`), the applet POSTs to
     `https://platform.claude.com/v1/oauth/token` with
     `grant_type=refresh_token` + the hardcoded client ID
-    `9d1c250a-e61b-44d9-88ed-5944d1962f5e` (Claude Code's). On a 401
-    from the usage endpoint, it refreshes once and retries. Refreshed
-    tokens stay in-memory; Claude Code owns `.credentials.json` and
-    we never write it. If the server rotates `refreshToken`, the next
-    applet startup sees the old one on disk and refreshes again on
-    401 — wasteful but correct.
-  - **OpenAI**: `~/.codex/auth.json` — Codex CLI's auth file, **read
-    only**. If the file's `OPENAI_API_KEY` field is non-empty, the
-    applet rejects it (the ChatGPT usage endpoint requires an OAuth
-    session, not an API key — matches Swift's behavior). Refresh is
-    proactive when `last_refresh` is older than 7 days, or reactive on
-    401, via `https://auth.openai.com/oauth/token` with client ID
-    `app_EMoamEEZ73f0CkXaXp7hrann` (Codex CLI's). Refreshed tokens
-    stay in-memory; Codex CLI owns `auth.json` and we never write it.
-    If the server rotates `refresh_token`, the next applet startup
-    sees the old one on disk and refreshes again on 401 — wasteful
-    but correct.
+    `9d1c250a-e61b-44d9-88ed-5944d1962f5e` (Claude Code's), then writes
+    the new envelope back atomically (`<file>.tmp` + `rename`). On a
+    401 from the usage endpoint, it refreshes once and retries — same
+    pattern as the Swift original.
+  - **OpenAI**: `~/.codex/auth.json` — Codex CLI's auth file. If the
+    file's `OPENAI_API_KEY` field is non-empty, the applet rejects it
+    (the ChatGPT usage endpoint requires an OAuth session, not an API
+    key — matches Swift's behavior). Refresh is proactive when
+    `last_refresh` is older than 7 days, or reactive on 401, via
+    `https://auth.openai.com/oauth/token` with client ID
+    `app_EMoamEEZ73f0CkXaXp7hrann` (Codex CLI's). Refreshed token +
+    `last_refresh` ISO timestamp are written back to `auth.json` via
+    the same atomic-rename pattern. The file is fully re-serialized
+    (`to_vec_pretty`, so whitespace is normalized and keys end up
+    alphabetized by `serde_json::Map`'s default `BTreeMap` backing),
+    but **the values of fields we don't touch are preserved** — we
+    mutate the parsed `serde_json::Value` in place rather than
+    round-tripping through our own struct, so unknown keys Codex
+    writes (and that we don't model) survive the rewrite.
 - **Usage endpoints**:
   - Anthropic: `GET https://api.anthropic.com/api/oauth/usage` with
     `Authorization: Bearer …`, `anthropic-beta: oauth-2025-04-20`,
@@ -793,11 +794,10 @@ src/
 │                   menu_view (Refresh), BarProgram canvas, color steps
 ├── models.rs       Provider enum + UsageWindow + ProviderSnapshot +
 │                   RefreshError; ProviderSnapshot::worst_used()
-├── anthropic.rs    load_credentials (read-only — Claude Code owns
-│                   .credentials.json) / refresh (in-memory) /
+├── anthropic.rs    load_credentials / save_credentials / refresh /
 │                   fetch_usage / fetch_snapshot + http_client()
-└── openai.rs       load_credentials (read-only — Codex CLI owns
-                    auth.json) / refresh (in-memory) / fetch_usage /
+└── openai.rs       load_credentials / save_refreshed (preserves
+                    unknown JSON fields) / refresh / fetch_usage /
                     fetch_snapshot
 ```
 
@@ -812,12 +812,21 @@ src/
 - **Preserve the MIT license header** in `cosmic-applet-quotabar/LICENSE`
   (both copyright notices) and the `license = "MIT"` line in this
   crate's `Cargo.toml`. Do not flip it to `license.workspace = true`.
-- **Credential files are read-only.** Never write
-  `~/.claude/.credentials.json` or `~/.codex/auth.json` from this
-  crate — Claude Code and Codex CLI are the sole writers. Refreshed
-  tokens stay in-memory for the current `fetch_snapshot` call. If the
-  OAuth server rotates the `refresh_token`, we lose the new one at
-  exit and refresh again on 401 next session — wasteful but correct.
+- **Atomic credential writes only, mode-preserving.** Both providers
+  go through `atomic::write_preserving_mode` (`src/atomic.rs`), which
+  writes `<file>.tmp` then `rename(2)`s it into place. Two invariants
+  it guards:
+  1. **Atomicity** — readers see the old file or the new file, never
+     a half-written one. Claude Code and Codex are *also*
+     reading/writing these files; a plain `std::fs::write` would
+     leave a torn file behind if the process is killed mid-write and
+     brittle them.
+  2. **Mode preservation** — the tmp file is opened with
+     `OpenOptionsExt::mode` set to whatever mode the original file
+     carries (default `0o600` for credentials), so a freshly-renamed
+     `.credentials.json` / `auth.json` keeps its `0600` permissions
+     instead of dropping to the umask default (`0644`, world-readable).
+  Don't bypass this helper.
 - **Don't add a keyring layer.** The whole point of QuotaBar is that
   there is no per-app credential setup — the applet rides on the
   sessions Claude Code and Codex already maintain. If you want a

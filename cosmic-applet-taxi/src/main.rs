@@ -1,4 +1,5 @@
 mod app;
+mod atomic;
 mod config;
 mod export;
 mod lock;
