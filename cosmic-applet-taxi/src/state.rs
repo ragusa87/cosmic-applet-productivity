@@ -5,6 +5,8 @@ use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::atomic;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub start: DateTime<Local>,
@@ -110,10 +112,8 @@ impl AppState {
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
         let json = serde_json::to_vec_pretty(self).context("serialize state")?;
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, &json).with_context(|| format!("write {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path)
-            .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+        atomic::write_preserving_mode(&path, &json, 0o644)
+            .with_context(|| format!("atomic write {}", path.display()))?;
         Ok(())
     }
 

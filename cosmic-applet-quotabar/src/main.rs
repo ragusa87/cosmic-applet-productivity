@@ -1,5 +1,6 @@
 mod anthropic;
 mod app;
+mod atomic;
 mod models;
 mod openai;
 mod ui;
