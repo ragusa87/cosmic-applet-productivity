@@ -43,7 +43,7 @@ All five applets are written in Rust on libcosmic / iced and follow the
 ## Workspace layout
 
 ```
-cosmic-applet-google/
+cosmic-applet-productivity/
 ├── Cargo.toml                         # workspace root + workspace.dependencies
 ├── justfile                           # build/install/uninstall all five applets
 ├── rust-toolchain.toml                # channel = stable
