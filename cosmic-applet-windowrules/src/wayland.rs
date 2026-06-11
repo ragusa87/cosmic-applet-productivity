@@ -349,6 +349,14 @@ impl AppData {
             );
             return;
         };
+        if tinfo.workspace.contains(&workspace.handle) {
+            tracing::info!(
+                id = %t_ref.0,
+                workspace = %workspace.name,
+                "toplevel already on target workspace; skipping move"
+            );
+            return;
+        }
         let group = self
             .workspace_state
             .workspace_groups()

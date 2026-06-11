@@ -45,14 +45,30 @@ impl Status {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct Form {
     app_id: String,
     title_contains: String,
     workspace_idx: Option<usize>, // index into `workspaces` (real, not label-shifted)
     picked_toplevel_idx: Option<usize>, // index into `toplevels`
     switch_to_workspace: bool,
+    skip_empty_title: bool,
     editing: Option<Uuid>,
+}
+
+impl Default for Form {
+    fn default() -> Self {
+        // skip_empty_title mirrors `Rule`'s default — see models.rs.
+        Self {
+            app_id: String::new(),
+            title_contains: String::new(),
+            workspace_idx: None,
+            picked_toplevel_idx: None,
+            switch_to_workspace: false,
+            skip_empty_title: true,
+            editing: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +81,7 @@ pub enum Msg {
     /// Receives the dropdown's label-index (0 = the synthetic placeholder).
     FormPickWorkspace(usize),
     FormSwitchToWorkspace(bool),
+    FormSkipEmptyTitle(bool),
     SaveRule,
     EditRule(Uuid),
     CancelEdit,
@@ -144,6 +161,10 @@ impl cosmic::Application for SettingsApp {
             .label("Switch to the chosen workspace".to_owned())
             .on_toggle(Msg::FormSwitchToWorkspace);
 
+        let skip_empty_toggle = toggler(self.form.skip_empty_title)
+            .label("Skip windows with an empty title".to_owned())
+            .on_toggle(Msg::FormSkipEmptyTitle);
+
         let pin_tip = pin_workspace_tip();
 
         let is_editing = self.form.editing.is_some();
@@ -185,6 +206,7 @@ impl cosmic::Application for SettingsApp {
             .push(title)
             .push(ws_section)
             .push(switch_toggle)
+            .push(skip_empty_toggle)
             .push(actions)
             .push(status)
             .push(pin_tip);
@@ -220,6 +242,7 @@ impl cosmic::Application for SettingsApp {
                 }
             }
             Msg::FormSwitchToWorkspace(v) => self.form.switch_to_workspace = v,
+            Msg::FormSkipEmptyTitle(v) => self.form.skip_empty_title = v,
             Msg::SaveRule => self.save_rule(),
             Msg::EditRule(id) => self.start_edit(id),
             Msg::CancelEdit => {
@@ -342,6 +365,7 @@ impl SettingsApp {
         candidate.title_contains = title_contains.clone();
         candidate.target_output = target_output.clone();
         candidate.switch_to_workspace = self.form.switch_to_workspace;
+        candidate.skip_empty_title = self.form.skip_empty_title;
 
         // Reject a rule that would compete with an existing one for the same
         // toplevels: same app_id + same (or both absent) title_contains.
@@ -370,6 +394,7 @@ impl SettingsApp {
                 r.target = target;
                 r.target_output = target_output;
                 r.switch_to_workspace = self.form.switch_to_workspace;
+                r.skip_empty_title = self.form.skip_empty_title;
             } else {
                 self.status = Some(Status::error("Rule no longer exists."));
                 return;
@@ -417,6 +442,7 @@ impl SettingsApp {
             workspace_idx,
             picked_toplevel_idx: None,
             switch_to_workspace: rule.switch_to_workspace,
+            skip_empty_title: rule.skip_empty_title,
             editing: Some(id),
         };
         self.status = Some(Status::info(format!("Editing rule for {}", rule.app_id)));
