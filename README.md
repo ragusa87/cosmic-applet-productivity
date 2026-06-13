@@ -1,5 +1,10 @@
 # cosmic-applet for productivity (google+taxi+slack+quotabar)
 
+> **Disclaimer:** all of these applets are vibe-coded. They work on the
+> author's machine; expect rough edges, audit anything that touches
+> credentials before relying on it, and treat the code as a starting
+> point rather than production-grade software.
+
 Five COSMIC desktop panel applets — two that surface bits of your Google
 account, one that tracks time and exports to a [taxi](https://github.com/sephii/taxi)
 timesheet, one that mirrors the Slack tray-icon unread count by reading
