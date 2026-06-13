@@ -317,8 +317,8 @@ impl SettingsApp {
         } else {
             format!("— pick one of {ws_count} workspace(s) —")
         });
-        for (idx, w) in self.workspaces.iter().enumerate() {
-            let name = display_ws_name(&w.name, idx);
+        for w in &self.workspaces {
+            let name = display_ws_name(&w.name, w.index as usize);
             let mut label = match &w.output_name {
                 Some(out) => format!("{name}  ({out})"),
                 None => name,
