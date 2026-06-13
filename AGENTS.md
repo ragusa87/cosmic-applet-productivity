@@ -856,7 +856,9 @@ src/
 ## Build / run / test commands
 
 ```sh
-just check                              # cargo clippy --workspace --all-features
+cargo fmt --all                         # rustfmt across the workspace (must pass before handoff)
+cargo fmt --all -- --check              # verify formatting without writing
+just check                              # cargo clippy --workspace --all-features -- -W clippy::pedantic (must pass clean)
 just release                            # release build + user install (all members)
 just release cosmic-applet-gmail        # release build + user install (one crate)
 just dev cosmic-applet-gmail            # release-fast build + user install + restart cosmic-panel
@@ -897,7 +899,10 @@ cosmic-applet-…` and the panel respawns it. Then:
 
 ## Conventions (applies to all crates)
 
-- **clippy pedantic is mandatory.** `just check` must stay clean. The one
+- **`cargo fmt --all` and clippy pedantic are mandatory.** Both
+  `cargo fmt --all -- --check` and `just check` (which runs
+  `cargo clippy --workspace --all-features -- -W clippy::pedantic`) must
+  stay clean before handing work back. The one
   `#[allow(clippy::too_many_lines)]` on each `App::update` is intentional —
   keep the message dispatch flat; don't split it just to shrink line count.
 - **No `unwrap()` or `expect()`** in normal paths. Use `anyhow::Result` for
