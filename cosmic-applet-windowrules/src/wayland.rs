@@ -82,10 +82,6 @@ pub enum WlCommand {
         /// `None` means "any output" (first match wins, legacy behaviour).
         output: Option<String>,
     },
-    PinWorkspace {
-        workspace: WorkspaceRef,
-        output: Option<String>,
-    },
     /// Switch the active workspace to the target one (no toplevel involved).
     ActivateWorkspace {
         workspace: WorkspaceRef,
@@ -277,9 +273,6 @@ impl AppData {
                 workspace,
                 output,
             } => self.move_toplevel(&toplevel, &workspace, output.as_deref()),
-            WlCommand::PinWorkspace { workspace, output } => {
-                self.pin_workspace(&workspace, output.as_deref());
-            }
             WlCommand::ActivateWorkspace { workspace, output } => {
                 self.activate_workspace(&workspace, output.as_deref());
             }
@@ -377,33 +370,6 @@ impl AppData {
             &workspace.handle,
             output,
         );
-    }
-
-    fn pin_workspace(&self, w_ref: &WorkspaceRef, output_filter: Option<&str>) {
-        let Some(workspace) = find_workspace(
-            &self.workspace_state,
-            &self.outputs_by_proxy,
-            w_ref,
-            output_filter,
-        ) else {
-            return;
-        };
-        let Some(cosmic) = workspace.cosmic_handle.as_ref() else {
-            tracing::info!("workspace has no v2 cosmic handle; pin unsupported");
-            return;
-        };
-        let bit = zcosmic_workspace_handle_v2::WorkspaceCapabilities::from_bits_truncate(1 << 3);
-        if !workspace.cosmic_capabilities.contains(bit) {
-            tracing::info!("workspace does not advertise pin capability");
-            return;
-        }
-        cosmic.pin();
-        // ext_workspace_manager_v1 requires an explicit commit() to flush
-        // staged requests (activate/pin/etc.). Without this the compositor
-        // ignores everything we just sent.
-        if let Ok(mgr) = self.workspace_state.workspace_manager().get() {
-            mgr.commit();
-        }
     }
 }
 

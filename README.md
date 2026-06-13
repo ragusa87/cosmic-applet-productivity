@@ -510,12 +510,11 @@ No OAuth, no API keys, no daemon — it just listens for new toplevels
 over `ext-foreign-toplevel-list-v1` and acts on them via
 `zcosmic_toplevel_manager_v1::move_to_ext_workspace`.
 
-**What you see** — the panel button shows a workspace-grid icon, and
-when at least one rule is enabled, a small numeric badge with the
-count. **Left-click** opens a status popup (enabled / total rules,
-last rule fired). **Right-click** opens a one-item menu with
-**Settings…**, which spawns the standalone rule editor as a regular
-Wayland toplevel (survives focus changes).
+**What you see** — the panel button shows a workspace-grid icon.
+**Left-click** opens a status popup (enabled / total rules, last rule
+fired). **Right-click** opens a one-item menu with **Settings…**,
+which spawns the standalone rule editor as a regular Wayland toplevel
+(survives focus changes).
 
 **The rule editor** lets you:
 

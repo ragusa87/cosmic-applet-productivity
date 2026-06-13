@@ -208,10 +208,6 @@ impl AppModel {
         };
         let output = rule.target_output.clone();
 
-        sender.send(WlCommand::PinWorkspace {
-            workspace: target.clone(),
-            output: output.clone(),
-        });
         sender.send(WlCommand::MoveToplevelToWorkspace {
             toplevel: crate::wayland::ToplevelRef(snap.identifier.clone()),
             workspace: target.clone(),
