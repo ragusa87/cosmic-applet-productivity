@@ -18,6 +18,10 @@ clean:
 check *args:
     cargo clippy --workspace --all-features {{args}} -- -W clippy::pedantic
 
+# Format the whole workspace with rustfmt.
+fix:
+    cargo fmt --all
+
 # Trigger an immediate refresh on every running workspace applet (SIGUSR2).
 refresh:
     #!/usr/bin/env bash
