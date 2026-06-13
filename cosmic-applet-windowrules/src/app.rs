@@ -1,6 +1,7 @@
 use cosmic::Element;
 use cosmic::app::Task;
-use cosmic::iced::{Length, Limits, Subscription, window::Id};
+use cosmic::applet::menu_button;
+use cosmic::iced::{Limits, Subscription, window::Id};
 use cosmic::surface::{self, action::destroy_popup};
 use cosmic::widget::{Column, button, text};
 
@@ -285,21 +286,10 @@ impl AppModel {
     }
 
     fn menu_view(&self) -> Element<'_, Message> {
-        // popup_container is wrapped in `autosize`, which shrinks to content;
-        // setting `width(Fill)` on the column is therefore meaningless. The
-        // dependable way to make the button match the popup width is to give
-        // its enclosing column an explicit fixed width that is consistent
-        // with the popup's size_limits (min_width=200, max_width=280).
-        const MENU_WIDTH: f32 = 220.0;
         let body = Column::new()
             .padding(4)
-            .spacing(4)
-            .width(Length::Fixed(MENU_WIDTH))
-            .push(
-                button::text("Settings…")
-                    .width(Length::Fill)
-                    .on_press(Message::OpenSettings),
-            );
+            .spacing(0)
+            .push(menu_button(text::body("Settings…")).on_press(Message::OpenSettings));
         Element::from(self.core.applet.popup_container(body))
     }
 }
@@ -359,7 +349,7 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
             settings.grab = true;
             settings.positioner.size_limits = Limits::NONE
                 .max_width(280.0)
-                .min_width(200.0)
+                .min_width(180.0)
                 .min_height(40.0)
                 .max_height(160.0);
             settings
