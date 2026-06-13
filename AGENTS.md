@@ -45,7 +45,7 @@ All five applets are written in Rust on libcosmic / iced and follow the
 ```
 cosmic-applet-productivity/
 ├── Cargo.toml                         # workspace root + workspace.dependencies
-├── justfile                           # build/install/uninstall all five applets
+├── justfile                           # dev/release/install/uninstall recipes (generic over workspace members)
 ├── rust-toolchain.toml                # channel = stable
 ├── LICENSE.md                         # GPL-3.0-or-later (+ MIT exception for quotabar) + icon attribution
 │
@@ -840,15 +840,13 @@ src/
 ## Build / run / test commands
 
 ```sh
-just check                   # cargo clippy --workspace --all-features
-just build-release           # cargo build --release (all five binaries)
-just install-user            # ~/.local/{bin,share/applications,share/icons/...}
-just run-gmail               # cargo run -p cosmic-applet-gmail (panel, headless)
-just run-agenda              # cargo run -p cosmic-applet-google-agenda
-just run-taxi                # cargo run -p cosmic-applet-taxi
-just run-slack               # cargo run -p cosmic-applet-slack
-just run-quotabar            # cargo run -p cosmic-applet-quotabar
-cargo test --workspace       # state/sessions/taxi/gmail/agenda unit tests
+just check                              # cargo clippy --workspace --all-features
+just release                            # release build + user install (all members)
+just release cosmic-applet-gmail        # release build + user install (one crate)
+just dev cosmic-applet-gmail            # release-fast build + user install + restart cosmic-panel
+just run cosmic-applet-gmail            # cargo run -p <crate> (headless, no panel icon)
+just refresh                            # SIGUSR2 every running workspace applet
+cargo test --workspace                  # state/sessions/taxi/gmail/agenda unit tests
 ```
 
 There is **no automated UI test** — a real COSMIC session is required. After
@@ -873,7 +871,7 @@ cosmic-applet-…` and the panel respawns it. Then:
   export dialog as a toplevel window
 - slack only: `cosmic-applet-slack --debug` → walks the session bus,
   prints each Slack-owned connection's PID/comm/tooltip/parse-decision,
-  no GUI. `RUST_LOG=cosmic_applet_slack=debug just run-slack` streams
+  no GUI. `RUST_LOG=cosmic_applet_slack=debug just run cosmic-applet-slack` streams
   per-fetch parse logging at runtime.
 - quotabar only: `cosmic-applet-quotabar --debug` → reads
   `~/.claude/.credentials.json` + `~/.codex/auth.json`, hits both
