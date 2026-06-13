@@ -4,14 +4,13 @@ use cosmic::iced::{Length, Limits, Subscription, window::Id};
 use cosmic::surface::{self, action::destroy_popup};
 use cosmic::widget::{Column, button, text};
 
-use crate::config::Config;
+use crate::config::{APP_ID, Config};
 use crate::models::Rule;
 use crate::wayland::{
     ManagerCaps, ToplevelSnapshot, WlCommand, WlEvent, WlSender, WorkspaceRef, WorkspaceSnapshot,
     run as wl_run,
 };
 
-const APP_ID: &str = "com.github.ragusa87.CosmicAppletWindowRules";
 const ICON_SVG: &[u8] =
     include_bytes!("../data/icons/com.github.ragusa87.CosmicAppletWindowRules.svg");
 
