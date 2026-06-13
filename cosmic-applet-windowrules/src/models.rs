@@ -26,7 +26,6 @@ pub struct Rule {
     /// shares the IDE's `app_id` but has no title and shouldn't be moved).
     #[serde(default = "default_skip_empty_title")]
     pub skip_empty_title: bool,
-    pub mode: ApplyMode,
 }
 
 fn default_skip_empty_title() -> bool {
@@ -64,7 +63,6 @@ impl Rule {
             target_output: None,
             switch_to_workspace: false,
             skip_empty_title: true,
-            mode: ApplyMode::ApplyInitially,
         }
     }
 
@@ -83,13 +81,6 @@ impl Rule {
             _ => false,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum ApplyMode {
-    #[default]
-    ApplyInitially,
-    Force,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,7 +113,6 @@ mod tests {
             target_output: None,
             switch_to_workspace: false,
             skip_empty_title: true,
-            mode: ApplyMode::ApplyInitially,
         }
     }
 
