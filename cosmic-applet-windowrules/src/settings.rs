@@ -284,7 +284,6 @@ async fn call_workspaces_show() -> zbus::Result<()> {
 impl SettingsApp {
     fn on_wl(&mut self, ev: WlEvent) {
         match ev {
-            WlEvent::Ready { .. } => {}
             WlEvent::Snapshot {
                 workspaces,
                 toplevels,
@@ -294,7 +293,7 @@ impl SettingsApp {
                 self.toplevels = toplevels;
                 self.refresh_labels();
             }
-            WlEvent::NewToplevel(_) => {}
+            WlEvent::Ready { .. } | WlEvent::NewToplevel(_) => {}
         }
     }
 
@@ -362,8 +361,8 @@ impl SettingsApp {
         // Candidate rule used purely for the uniqueness check. Its id is
         // discarded if we end up editing in place.
         let mut candidate = Rule::new(&app_id, target.clone());
-        candidate.title_contains = title_contains.clone();
-        candidate.target_output = target_output.clone();
+        candidate.title_contains.clone_from(&title_contains);
+        candidate.target_output.clone_from(&target_output);
         candidate.switch_to_workspace = self.form.switch_to_workspace;
         candidate.skip_empty_title = self.form.skip_empty_title;
 

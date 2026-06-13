@@ -11,9 +11,7 @@ use std::path::{Path, PathBuf};
 /// umask-default mode. When the target doesn't yet exist we fall back to
 /// `default_mode` — for credentials files that callers pass `0o600`.
 pub fn write_preserving_mode(path: &Path, bytes: &[u8], default_mode: u32) -> io::Result<()> {
-    let mode = std::fs::metadata(path)
-        .map(|m| m.permissions().mode() & 0o777)
-        .unwrap_or(default_mode);
+    let mode = std::fs::metadata(path).map_or(default_mode, |m| m.permissions().mode() & 0o777);
 
     let mut tmp_os: OsString = path.as_os_str().to_owned();
     tmp_os.push(".tmp");

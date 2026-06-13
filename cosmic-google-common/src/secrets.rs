@@ -10,6 +10,7 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    #[must_use]
     pub fn is_access_token_fresh(&self) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -41,6 +42,12 @@ fn entry(service: &str, account: &str) -> Result<keyring::Entry, SecretsError> {
     keyring::Entry::new(service, account).map_err(SecretsError::from)
 }
 
+/// Load stored tokens for `email` from the secret service under `service`.
+///
+/// # Errors
+///
+/// Returns `NotFound` if no entry exists, `Backend` if the secret service is
+/// unavailable, or `Decode` if the stored blob can't be parsed as `Tokens`.
 pub async fn load(service: &str, email: &str) -> Result<Tokens, SecretsError> {
     let service = service.to_owned();
     let email = email.to_owned();
@@ -52,6 +59,12 @@ pub async fn load(service: &str, email: &str) -> Result<Tokens, SecretsError> {
     .map_err(|e| SecretsError::Backend(e.to_string()))?
 }
 
+/// Persist `tokens` for `email` to the secret service under `service`.
+///
+/// # Errors
+///
+/// Returns `Backend` if the secret service is unavailable or `Decode` if the
+/// tokens can't be serialized.
 pub async fn save(service: &str, email: &str, tokens: &Tokens) -> Result<(), SecretsError> {
     let service = service.to_owned();
     let email = email.to_owned();

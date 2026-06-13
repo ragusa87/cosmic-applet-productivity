@@ -4,7 +4,7 @@ use crate::wayland::{WlEvent, run as wl_run};
 
 /// CLI debug mode: stream every wayland subscription event to stdout. Runs
 /// until SIGINT or the channel closes. Mirrors what the panel applet's iced
-/// subscription receives, so you can verify what app_ids / titles your live
+/// subscription receives, so you can verify what `app_ids` / titles your live
 /// session is emitting before writing a rule.
 pub fn run() {
     let runtime = tokio::runtime::Builder::new_current_thread()
