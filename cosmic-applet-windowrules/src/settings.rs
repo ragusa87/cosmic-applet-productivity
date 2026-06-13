@@ -45,6 +45,25 @@ impl Status {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormMode {
+    Idle,
+    Creating,
+    Editing(Uuid),
+}
+
+impl FormMode {
+    fn is_open(&self) -> bool {
+        !matches!(self, FormMode::Idle)
+    }
+    fn editing_id(&self) -> Option<Uuid> {
+        match self {
+            FormMode::Editing(id) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Form {
     app_id: String,
@@ -53,7 +72,7 @@ struct Form {
     picked_toplevel_idx: Option<usize>, // index into `toplevels`
     switch_to_workspace: bool,
     skip_empty_title: bool,
-    editing: Option<Uuid>,
+    mode: FormMode,
 }
 
 impl Default for Form {
@@ -66,7 +85,7 @@ impl Default for Form {
             picked_toplevel_idx: None,
             switch_to_workspace: false,
             skip_empty_title: true,
-            editing: None,
+            mode: FormMode::Idle,
         }
     }
 }
@@ -82,6 +101,7 @@ pub enum Msg {
     FormPickWorkspace(usize),
     FormSwitchToWorkspace(bool),
     FormSkipEmptyTitle(bool),
+    StartCreate,
     SaveRule,
     EditRule(Uuid),
     CancelEdit,
@@ -126,92 +146,48 @@ impl cosmic::Application for SettingsApp {
              send it to the chosen workspace once.",
         );
 
-        let mut rules_col = Column::new().spacing(6);
-        if self.config.rules.is_empty() {
-            rules_col = rules_col.push(text::caption("No rules yet — use the form below."));
+        let form_open = self.form.mode.is_open();
+        let editing_id = self.form.mode.editing_id();
+
+        // Rules card: header (heading + Add rule button) + list / empty-state.
+        let mut add_btn = button::suggested("Add rule");
+        if !form_open {
+            add_btn = add_btn.on_press(Msg::StartCreate);
         }
-        for r in &self.config.rules {
-            rules_col = rules_col.push(rule_row(r, &self.workspaces));
-        }
+        let rules_header = Row::new()
+            .align_y(Alignment::Center)
+            .spacing(8)
+            .push(text::heading("Rules").width(Length::Fill))
+            .push(add_btn);
 
-        let app_id = text_input("e.g. org.mozilla.firefox", &self.form.app_id)
-            .label("App ID (required, exact)")
-            .on_input(Msg::FormAppId);
-        let title = text_input("optional substring", &self.form.title_contains)
-            .label("Title contains (optional)")
-            .on_input(Msg::FormTitle);
-
-        // Convert real toplevel index → label-index by adding 1 (slot 0 = placeholder).
-        let pick_label_idx = self
-            .form
-            .picked_toplevel_idx
-            .map_or(Some(0), |i| Some(i + 1));
-        let ws_label_idx = self.form.workspace_idx.map_or(Some(0), |i| Some(i + 1));
-
-        let pick = dropdown(&self.toplevel_labels, pick_label_idx, Msg::FormPickToplevel);
-        let ws_pick = dropdown(&self.workspace_labels, ws_label_idx, Msg::FormPickWorkspace);
-
-        // Make each picker visually obvious by wrapping it in a labeled
-        // container with padding so the closed dropdown doesn't disappear
-        // into the surrounding layout.
-        let pick_section = labeled_picker("Pick an open window (autofills App ID)", pick.into());
-        let ws_section = labeled_picker("Target workspace", ws_pick.into());
-
-        let switch_toggle = toggler(self.form.switch_to_workspace)
-            .label("Switch to the chosen workspace".to_owned())
-            .on_toggle(Msg::FormSwitchToWorkspace);
-
-        let skip_empty_toggle = toggler(self.form.skip_empty_title)
-            .label("Skip windows with an empty title".to_owned())
-            .on_toggle(Msg::FormSkipEmptyTitle);
-
-        let pin_tip = pin_workspace_tip();
-
-        let is_editing = self.form.editing.is_some();
-        let save_label = if is_editing {
-            "Save changes"
+        let rules_body: Element<'_, Msg> = if self.config.rules.is_empty() {
+            text::caption("No rules yet. Click \"Add rule\" to get started.").into()
         } else {
-            "Add rule"
-        };
-        let mut actions = Row::new().spacing(8);
-        if is_editing {
-            actions = actions.push(button::standard("Cancel edit").on_press(Msg::CancelEdit));
-        }
-        actions = actions.push(button::suggested(save_label).on_press(Msg::SaveRule));
-
-        let status: Element<'_, Msg> = match &self.status {
-            Some(Status::Info(s)) => text::caption(s.clone()).into(),
-            Some(Status::Error(s)) => text::caption(s.clone())
-                .class(cosmic::theme::Text::Custom(error_text_style))
-                .into(),
-            None => text::caption("").into(),
+            let mut col = Column::new().spacing(6);
+            for r in &self.config.rules {
+                col = col.push(rule_row(r, &self.workspaces, form_open, editing_id));
+            }
+            col.into()
         };
 
-        let form_heading = if is_editing {
-            text::heading("Edit rule")
-        } else {
-            text::heading("Add a rule")
-        };
+        let rules_card = container(Column::new().spacing(8).push(rules_header).push(rules_body))
+            .padding(12)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card);
 
-        let col = Column::new()
+        let mut root = Column::new()
             .padding(16)
             .spacing(12)
             .push(header)
             .push(sub)
-            .push(text::heading("Rules"))
-            .push(rules_col)
-            .push(form_heading)
-            .push(pick_section)
-            .push(app_id)
-            .push(title)
-            .push(ws_section)
-            .push(switch_toggle)
-            .push(skip_empty_toggle)
-            .push(actions)
-            .push(status)
-            .push(pin_tip);
+            .push(rules_card)
+            .push(pin_workspace_tip());
 
-        container(scrollable(col).height(Length::Fill))
+        if form_open {
+            root = root.push(self.form_card());
+        }
+
+        container(scrollable(root).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -243,11 +219,21 @@ impl cosmic::Application for SettingsApp {
             }
             Msg::FormSwitchToWorkspace(v) => self.form.switch_to_workspace = v,
             Msg::FormSkipEmptyTitle(v) => self.form.skip_empty_title = v,
+            Msg::StartCreate => {
+                self.form = Form::default();
+                self.form.mode = FormMode::Creating;
+                self.status = None;
+            }
             Msg::SaveRule => self.save_rule(),
             Msg::EditRule(id) => self.start_edit(id),
             Msg::CancelEdit => {
+                let was_editing = matches!(self.form.mode, FormMode::Editing(_));
                 self.form = Form::default();
-                self.status = Some(Status::info("Edit cancelled."));
+                self.status = Some(Status::info(if was_editing {
+                    "Edit cancelled."
+                } else {
+                    "Cancelled."
+                }));
             }
             Msg::DeleteRule(id) => self.delete_rule(id),
             Msg::ToggleEnabled(id) => self.toggle_enabled(id),
@@ -369,11 +355,12 @@ impl SettingsApp {
         // Reject a rule that would compete with an existing one for the same
         // toplevels: same app_id + same (or both absent) title_contains.
         // When editing, the rule being edited is exempted from the check.
+        let editing_id = self.form.mode.editing_id();
         if let Some(dup) = self
             .config
             .rules
             .iter()
-            .find(|r| self.form.editing != Some(r.id) && r.matches_same_windows(&candidate))
+            .find(|r| editing_id != Some(r.id) && r.matches_same_windows(&candidate))
         {
             self.status = Some(Status::error(format!(
                 "A rule for {} (same title filter) already targets workspace {} — \
@@ -384,7 +371,7 @@ impl SettingsApp {
             return;
         }
 
-        if let Some(id) = self.form.editing {
+        if let Some(id) = editing_id {
             // Edit existing — preserve id, label, enabled, mode.
             if let Some(r) = self.config.rules.iter_mut().find(|r| r.id == id) {
                 r.app_id = app_id;
@@ -406,7 +393,7 @@ impl SettingsApp {
             self.status = Some(Status::error(format!("Save failed: {e}")));
             return;
         }
-        let was_editing = self.form.editing.is_some();
+        let was_editing = editing_id.is_some();
         self.form = Form::default();
         self.status = Some(Status::info(if was_editing {
             "Rule updated."
@@ -442,14 +429,14 @@ impl SettingsApp {
             picked_toplevel_idx: None,
             switch_to_workspace: rule.switch_to_workspace,
             skip_empty_title: rule.skip_empty_title,
-            editing: Some(id),
+            mode: FormMode::Editing(id),
         };
         self.status = Some(Status::info(format!("Editing rule for {}", rule.app_id)));
     }
 
     fn delete_rule(&mut self, id: Uuid) {
         self.config.rules.retain(|r| r.id != id);
-        if self.form.editing == Some(id) {
+        if self.form.mode.editing_id() == Some(id) {
             self.form = Form::default();
         }
         if let Err(e) = self.config.save() {
@@ -464,6 +451,80 @@ impl SettingsApp {
         if let Err(e) = self.config.save() {
             self.status = Some(Status::error(format!("Save failed: {e}")));
         }
+    }
+
+    fn form_card(&self) -> Element<'_, Msg> {
+        let is_editing = matches!(self.form.mode, FormMode::Editing(_));
+        let heading_text = if is_editing { "Edit rule" } else { "Add rule" };
+        let save_label = if is_editing {
+            "Save changes"
+        } else {
+            "Add rule"
+        };
+
+        let header_row = Row::new()
+            .align_y(Alignment::Center)
+            .spacing(8)
+            .push(text::heading(heading_text).width(Length::Fill))
+            .push(button::standard("Cancel").on_press(Msg::CancelEdit));
+
+        let app_id = text_input("e.g. org.mozilla.firefox", &self.form.app_id)
+            .label("App ID (required, exact)")
+            .on_input(Msg::FormAppId);
+        let title = text_input("optional substring", &self.form.title_contains)
+            .label("Title contains (optional)")
+            .on_input(Msg::FormTitle);
+
+        let pick_label_idx = self
+            .form
+            .picked_toplevel_idx
+            .map_or(Some(0), |i| Some(i + 1));
+        let ws_label_idx = self.form.workspace_idx.map_or(Some(0), |i| Some(i + 1));
+
+        let pick = dropdown(&self.toplevel_labels, pick_label_idx, Msg::FormPickToplevel);
+        let ws_pick = dropdown(&self.workspace_labels, ws_label_idx, Msg::FormPickWorkspace);
+
+        let pick_section = labeled_picker("Pick an open window (autofills App ID)", pick.into());
+        let ws_section = labeled_picker("Target workspace", ws_pick.into());
+
+        let switch_toggle = toggler(self.form.switch_to_workspace)
+            .label("Switch to the chosen workspace".to_owned())
+            .on_toggle(Msg::FormSwitchToWorkspace);
+
+        let skip_empty_toggle = toggler(self.form.skip_empty_title)
+            .label("Skip windows with an empty title".to_owned())
+            .on_toggle(Msg::FormSkipEmptyTitle);
+
+        let status: Element<'_, Msg> = match &self.status {
+            Some(Status::Info(s)) => text::caption(s.clone()).into(),
+            Some(Status::Error(s)) => text::caption(s.clone())
+                .class(cosmic::theme::Text::Custom(error_text_style))
+                .into(),
+            None => text::caption("").into(),
+        };
+
+        let footer = Row::new()
+            .spacing(8)
+            .push(button::standard("Cancel").on_press(Msg::CancelEdit))
+            .push(button::suggested(save_label).on_press(Msg::SaveRule));
+
+        let body = Column::new()
+            .spacing(10)
+            .push(header_row)
+            .push(pick_section)
+            .push(app_id)
+            .push(title)
+            .push(ws_section)
+            .push(switch_toggle)
+            .push(skip_empty_toggle)
+            .push(status)
+            .push(footer);
+
+        container(body)
+            .padding(12)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card)
+            .into()
     }
 }
 
@@ -511,32 +572,55 @@ fn pin_workspace_tip<'a>() -> Element<'a, Msg> {
         .into()
 }
 
-fn rule_row<'a>(r: &'a Rule, workspaces: &'a [WorkspaceSnapshot]) -> Element<'a, Msg> {
+fn rule_row<'a>(
+    r: &'a Rule,
+    workspaces: &'a [WorkspaceSnapshot],
+    form_open: bool,
+    editing_id: Option<Uuid>,
+) -> Element<'a, Msg> {
     let target_str = render_target(r, workspaces);
     let switch_suffix = if r.switch_to_workspace {
         "  + switch"
     } else {
         ""
     };
-    let summary = match &r.title_contains {
-        Some(t) => format!(
-            "{}  (title ⊇ \"{}\")  →  workspace {target_str}{switch_suffix}",
-            r.app_id, t,
-        ),
-        None => format!("{}  →  workspace {target_str}{switch_suffix}", r.app_id),
+    let primary = match &r.title_contains {
+        Some(t) => format!("{}  (title ⊇ \"{}\")", r.app_id, t),
+        None => r.app_id.clone(),
     };
-    let edit = button::standard("Edit").on_press(Msg::EditRule(r.id));
-    let toggle = button::standard(if r.enabled { "Disable" } else { "Enable" })
-        .on_press(Msg::ToggleEnabled(r.id));
-    let del = button::destructive("Delete").on_press(Msg::DeleteRule(r.id));
+    let secondary = format!("→  workspace {target_str}{switch_suffix}");
+    let summary = Column::new()
+        .spacing(2)
+        .push(text::body(primary))
+        .push(text::caption(secondary))
+        .width(Length::Fill);
 
-    Row::new()
+    let enabled_toggle = toggler(r.enabled).on_toggle(move |_| Msg::ToggleEnabled(r.id));
+
+    let is_being_edited = editing_id == Some(r.id);
+    let mut edit_btn = button::standard("Edit");
+    if !form_open || is_being_edited {
+        edit_btn = edit_btn.on_press(Msg::EditRule(r.id));
+    }
+    let del_btn = button::destructive("Delete").on_press(Msg::DeleteRule(r.id));
+
+    let row = Row::new()
         .align_y(Alignment::Center)
-        .spacing(8)
-        .push(text::body(summary).width(Length::Fill))
-        .push(edit)
-        .push(toggle)
-        .push(del)
+        .spacing(10)
+        .push(enabled_toggle)
+        .push(summary)
+        .push(edit_btn)
+        .push(del_btn);
+
+    let class = if is_being_edited {
+        cosmic::theme::Container::Primary
+    } else {
+        cosmic::theme::Container::Transparent
+    };
+    container(row)
+        .padding(8)
+        .width(Length::Fill)
+        .class(class)
         .into()
 }
 
