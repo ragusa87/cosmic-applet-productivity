@@ -55,11 +55,11 @@ session. On Pop!_OS / COSMIC the Secret Service backend is gnome-keyring;
 it must be running for either applet to remember credentials.
 
 ```sh
-just build-release
-just install-user        # installs all five applets into ~/.local; use `sudo just install` for /usr
+just release             # release build + user install into ~/.local for all five applets
+                         # (use `sudo just install-system` after this for /usr)
 ```
 
-`just install-user` lays each applet's binary, desktop entry, and icon into:
+`just release` lays each applet's binary, desktop entry, and icon into:
 
 - `~/.local/bin/cosmic-applet-{gmail,google-agenda,taxi,slack,quotabar}`
 - `~/.local/share/applications/com.github.ragusa87.CosmicApplet{Gmail,GoogleAgenda,Taxi,Slack,QuotaBar}.desktop`
@@ -73,21 +73,20 @@ just install-user        # installs all five applets into ~/.local; use `sudo ju
 If you only want one applet:
 
 ```sh
-cargo build --release -p cosmic-applet-gmail
-# or
-cargo build --release -p cosmic-applet-google-agenda
-# or
-cargo build --release -p cosmic-applet-taxi
-# or
-cargo build --release -p cosmic-applet-slack
-# or
-cargo build --release -p cosmic-applet-quotabar
+just release cosmic-applet-gmail         # or any other workspace crate
+```
+
+For tight dev-loop iteration on a single applet (release-fast build, user
+install, restart `cosmic-panel`):
+
+```sh
+just dev cosmic-applet-gmail
 ```
 
 ### Add an applet to the panel
 
-A COSMIC panel applet is **not** a standalone program — `just run-gmail`
-(or running either binary directly) will not produce a panel icon, because
+A COSMIC panel applet is **not** a standalone program — `just run cosmic-applet-gmail`
+(or running the binary directly) will not produce a panel icon, because
 applets are spawned by the COSMIC panel as Wayland sub-surfaces. Once
 installed:
 
@@ -111,7 +110,7 @@ below, and right-click the new panel icon → **Credentials** to authorize.
 ### Uninstall
 
 ```sh
-just uninstall-user       # or `sudo just uninstall` for /usr
+just uninstall-user       # or `sudo just uninstall-system` for /usr
 ```
 
 Removes the binary, desktop entry, and icon for **all five** applets.

@@ -2,129 +2,94 @@ rootdir := ''
 prefix := '/usr'
 
 base-dir := absolute_path(clean(rootdir / prefix))
+user-base-dir := env('HOME') / '.local'
 cargo-target-dir := env('CARGO_TARGET_DIR', 'target')
 
-home := env('HOME')
-user-base-dir := home / '.local'
+# Listing recipes is a safer default than building the whole workspace.
+default:
+    @just --list
 
-gmail-name := 'cosmic-applet-gmail'
-gmail-appid := 'com.github.ragusa87.CosmicAppletGmail'
-agenda-name := 'cosmic-applet-google-agenda'
-agenda-appid := 'com.github.ragusa87.CosmicAppletGoogleAgenda'
-taxi-name := 'cosmic-applet-taxi'
-taxi-appid := 'com.github.ragusa87.CosmicAppletTaxi'
-slack-name := 'cosmic-applet-slack'
-slack-appid := 'com.github.ragusa87.CosmicAppletSlack'
-quotabar-name := 'cosmic-applet-quotabar'
-quotabar-appid := 'com.github.ragusa87.CosmicAppletQuotaBar'
-
-default: build-release
+# === housekeeping ===
 
 clean:
     cargo clean
 
-build-debug crate='' *args:
-    cargo build {{ if crate == '' { '' } else { '-p ' + crate } }} {{args}}
-
-# Release build. With no arg, builds the whole workspace. Pass a crate name to
-# build only that applet, e.g. `just build-release cosmic-applet-taxi`.
-build-release crate='' *args: (build-debug crate '--release' args)
-
-# Fast release build of a single applet — optimized but no LTO. Outputs to
-# target/release-fast/<crate>. Example: `just build-fast cosmic-applet-taxi`.
-build-fast crate *args:
-    cargo build --profile=release-fast -p {{crate}} {{args}}
-
-# Install a single applet from the release-fast profile into ~/.local
-# without rebuilding the other two. Example: `just install-fast cosmic-applet-taxi`.
-install-fast crate *args: (build-fast crate args)
-    @just _install-fast {{crate}} $(just _appid-of {{crate}})
-
-_install-fast name appid:
-    install -Dm0755 {{ cargo-target-dir / 'release-fast' / name }} {{ user-base-dir / 'bin' / name }}
-    install -Dm0644 {{ name / 'data' / appid + '.desktop' }} {{ user-base-dir / 'share' / 'applications' / appid + '.desktop' }}
-    install -Dm0644 {{ name / 'data' / 'icons' / appid + '.svg' }} {{ user-base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / appid + '.svg' }}
-
-_appid-of crate:
-    @case "{{crate}}" in \
-        cosmic-applet-gmail)         echo "{{gmail-appid}}" ;; \
-        cosmic-applet-google-agenda) echo "{{agenda-appid}}" ;; \
-        cosmic-applet-taxi)          echo "{{taxi-appid}}" ;; \
-        cosmic-applet-slack)         echo "{{slack-appid}}" ;; \
-        cosmic-applet-quotabar)      echo "{{quotabar-appid}}" ;; \
-        *) echo "unknown crate: {{crate}}" >&2; exit 1 ;; \
-    esac
-
+# Workspace clippy with pedantic lints (matches the pre-commit hook).
 check *args:
     cargo clippy --workspace --all-features {{args}} -- -W clippy::pedantic
 
-run-gmail *args:
-    env RUST_BACKTRACE=full cargo run --release -p cosmic-applet-gmail {{args}}
-
-run-agenda *args:
-    env RUST_BACKTRACE=full cargo run --release -p cosmic-applet-google-agenda {{args}}
-
-run-taxi *args:
-    env RUST_BACKTRACE=full cargo run --release -p cosmic-applet-taxi {{args}}
-
-run-slack *args:
-    env RUST_BACKTRACE=full cargo run --release -p cosmic-applet-slack {{args}}
-
-run-quotabar *args:
-    env RUST_BACKTRACE=full cargo run --release -p cosmic-applet-quotabar {{args}}
-
+# Trigger an immediate refresh on every running workspace applet (SIGUSR2).
 refresh:
-    -pkill -USR2 -f cosmic-applet-gmail            # poll Gmail right now
-    -pkill -USR2 -f cosmic-applet-google-agenda    # refetch calendar right now
-    -pkill -USR2 -f cosmic-applet-taxi             # reload taxi state right now
-    -pkill -USR2 -f cosmic-applet-slack            # re-read Slack tooltip right now
-    -pkill -USR2 -f cosmic-applet-quotabar         # refetch AI usage right now
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for d in */data; do
+        compgen -G "$d/*.desktop" >/dev/null || continue
+        pkill -USR2 -f "${d%/data}" || true
+    done
 
-# Fast-build a single applet, user-install it, then restart cosmic-panel so it
-# picks up the new binary. Example: `just debug-run cosmic-applet-taxi`.
-debug-run crate *args: (install-fast crate args)
+# === everyday dev loop ===
+
+# Fast-iterate one applet: release-fast build, user install, restart cosmic-panel.
+dev crate:
+    cargo build --profile=release-fast -p {{crate}}
+    @just _install release-fast {{user-base-dir}} {{crate}}
     -pkill -x cosmic-panel
 
-install: \
-    (_install-system gmail-name gmail-appid) \
-    (_install-system agenda-name agenda-appid) \
-    (_install-system taxi-name taxi-appid) \
-    (_install-system slack-name slack-appid) \
-    (_install-system quotabar-name quotabar-appid)
+# Run an applet from source with backtraces (no panel icon — log/settings use only).
+run crate *args:
+    env RUST_BACKTRACE=full cargo run --release -p {{crate}} {{args}}
 
-install-user: \
-    (_install-user gmail-name gmail-appid) \
-    (_install-user agenda-name agenda-appid) \
-    (_install-user taxi-name taxi-appid) \
-    (_install-user slack-name slack-appid) \
-    (_install-user quotabar-name quotabar-appid)
+# === release / install ===
 
-uninstall: \
-    (_uninstall-system gmail-name gmail-appid) \
-    (_uninstall-system agenda-name agenda-appid) \
-    (_uninstall-system taxi-name taxi-appid) \
-    (_uninstall-system slack-name slack-appid) \
-    (_uninstall-system quotabar-name quotabar-appid)
+# Release build + user install into ~/.local (no arg = whole workspace).
+release crate='':
+    cargo build --release {{ if crate == '' { '' } else { '-p ' + crate } }}
+    @just _install release {{user-base-dir}} {{crate}}
 
-uninstall-user: \
-    (_uninstall-user gmail-name gmail-appid) \
-    (_uninstall-user agenda-name agenda-appid) \
-    (_uninstall-user taxi-name taxi-appid) \
-    (_uninstall-user slack-name slack-appid) \
-    (_uninstall-user quotabar-name quotabar-appid)
+# System-wide install into /usr (no rebuild — run `just release` first).
+install-system:
+    @just _install release {{base-dir}} ''
 
-_install-system name appid:
-    install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{ base-dir / 'bin' / name }}
-    install -Dm0644 {{ name / 'data' / appid + '.desktop' }} {{ base-dir / 'share' / 'applications' / appid + '.desktop' }}
-    install -Dm0644 {{ name / 'data' / 'icons' / appid + '.svg' }} {{ base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / appid + '.svg' }}
+# Remove every workspace applet's binary, desktop entry, and icon from /usr.
+uninstall-system:
+    @just _uninstall {{base-dir}}
 
-_install-user name appid:
-    install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{ user-base-dir / 'bin' / name }}
-    install -Dm0644 {{ name / 'data' / appid + '.desktop' }} {{ user-base-dir / 'share' / 'applications' / appid + '.desktop' }}
-    install -Dm0644 {{ name / 'data' / 'icons' / appid + '.svg' }} {{ user-base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / appid + '.svg' }}
+# Remove every workspace applet's binary, desktop entry, and icon from ~/.local.
+uninstall-user:
+    @just _uninstall {{user-base-dir}}
 
-_uninstall-system name appid:
-    rm -f {{ base-dir / 'bin' / name }} {{ base-dir / 'share' / 'applications' / appid + '.desktop' }} {{ base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / appid + '.svg' }}
+# === internals ===
 
-_uninstall-user name appid:
-    rm -f {{ user-base-dir / 'bin' / name }} {{ user-base-dir / 'share' / 'applications' / appid + '.desktop' }} {{ user-base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / appid + '.svg' }}
+# Install one applet (when `crate` is given) or every applet that ships a
+# desktop file (when `crate` is empty). The appid is discovered from
+# `<crate>/data/*.desktop`, so new applets need no justfile changes.
+_install profile dest crate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "{{crate}}" ]]; then
+        crates=({{crate}})
+    else
+        crates=()
+        for d in */data; do
+            compgen -G "$d/*.desktop" >/dev/null && crates+=("${d%/data}")
+        done
+    fi
+    for c in "${crates[@]}"; do
+        appid=$(basename "$c"/data/*.desktop .desktop)
+        install -Dm0755 "{{cargo-target-dir}}/{{profile}}/$c" "{{dest}}/bin/$c"
+        install -Dm0644 "$c/data/$appid.desktop"           "{{dest}}/share/applications/$appid.desktop"
+        install -Dm0644 "$c/data/icons/$appid.svg"         "{{dest}}/share/icons/hicolor/scalable/apps/$appid.svg"
+    done
+
+_uninstall dest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for d in */data; do
+        compgen -G "$d/*.desktop" >/dev/null || continue
+        c="${d%/data}"
+        appid=$(basename "$c"/data/*.desktop .desktop)
+        rm -f \
+            "{{dest}}/bin/$c" \
+            "{{dest}}/share/applications/$appid.desktop" \
+            "{{dest}}/share/icons/hicolor/scalable/apps/$appid.svg"
+    done
