@@ -45,10 +45,11 @@ run crate *args:
 release crate='':
     cargo build --release {{ if crate == '' { '' } else { '-p ' + crate } }}
     @just _install release {{user-base-dir}} {{crate}}
+    -pkill -x cosmic-panel
 
 # System-wide install into /usr (no rebuild — run `just release` first).
 install-system:
-    @just _install release {{base-dir}} ''
+    @just _install release {{base-dir}}
 
 # Remove every workspace applet's binary, desktop entry, and icon from /usr.
 uninstall-system:
@@ -63,7 +64,7 @@ uninstall-user:
 # Install one applet (when `crate` is given) or every applet that ships a
 # desktop file (when `crate` is empty). The appid is discovered from
 # `<crate>/data/*.desktop`, so new applets need no justfile changes.
-_install profile dest crate:
+_install profile dest crate='':
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -n "{{crate}}" ]]; then

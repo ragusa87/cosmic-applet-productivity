@@ -859,8 +859,8 @@ src/
 cargo fmt --all                         # rustfmt across the workspace (must pass before handoff)
 cargo fmt --all -- --check              # verify formatting without writing
 just check                              # cargo clippy --workspace --all-features -- -W clippy::pedantic (must pass clean)
-just release                            # release build + user install (all members)
-just release cosmic-applet-gmail        # release build + user install (one crate)
+just release                            # release build + user install + restart cosmic-panel (all members)
+just release cosmic-applet-gmail        # release build + user install + restart cosmic-panel (one crate)
 just dev cosmic-applet-gmail            # release-fast build + user install + restart cosmic-panel
 just run cosmic-applet-gmail            # cargo run -p <crate> (headless, no panel icon)
 just refresh                            # SIGUSR2 every running workspace applet
