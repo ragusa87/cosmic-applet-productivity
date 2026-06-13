@@ -137,14 +137,17 @@ pub fn run() -> impl cosmic::iced::futures::Stream<Item = WlEvent> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
 
-        std::thread::Builder::new()
+        if let Err(e) = std::thread::Builder::new()
             .name("windowrules-wayland".into())
             .spawn(move || {
                 if let Err(e) = wayland_main(event_tx, cmd_rx, &stop_thread) {
                     tracing::error!(error = %e, "wayland thread exited with error");
                 }
             })
-            .expect("spawn wayland thread");
+        {
+            tracing::error!(error = %e, "failed to spawn wayland thread");
+            return;
+        }
 
         let sender = WlSender(Arc::new(Mutex::new(cmd_tx)));
 

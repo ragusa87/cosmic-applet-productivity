@@ -528,9 +528,7 @@ impl SettingsApp {
     }
 }
 
-/// Style function used by `cosmic::theme::Text::Custom` to render error
-/// statuses in the destructive (red) accent. Must be a free `fn` since
-/// `Text::Custom` takes a function pointer (no captures).
+// `Text::Custom` takes a function pointer (no captures), so this must be a free `fn`.
 fn error_text_style(theme: &cosmic::Theme) -> cosmic::iced::widget::text::Style {
     let palette = theme.cosmic();
     cosmic::iced::widget::text::Style {
@@ -551,9 +549,6 @@ fn labeled_picker<'a>(label: &'a str, picker: Element<'a, Msg>) -> Element<'a, M
         .into()
 }
 
-/// Tip card explaining why the target workspace should be pinned. Drops the
-/// step-by-step "press Super then click the pin" description in favour of a
-/// button that opens the Workspaces overview directly.
 fn pin_workspace_tip<'a>() -> Element<'a, Msg> {
     let heading = text::body("💡 Pin the target workspace");
     let body = text::caption(
@@ -624,11 +619,9 @@ fn rule_row<'a>(
         .into()
 }
 
-/// Render a rule's workspace target with its owning output. Prefers the
-/// `target_output` saved with the rule (authoritative on multi-monitor
-/// setups where two workspaces can share a name). Falls back to looking up
-/// the first matching workspace from the live snapshot — used for rules
-/// persisted before `target_output` existed.
+// Prefer the rule's saved `target_output` (authoritative on multi-monitor
+// setups where two workspaces can share a name); fall back to the live snapshot
+// for rules persisted before `target_output` existed.
 fn render_target(rule: &Rule, workspaces: &[WorkspaceSnapshot]) -> String {
     let output = rule.target_output.clone().or_else(|| {
         workspaces
