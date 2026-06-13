@@ -60,7 +60,8 @@ session. On Pop!_OS / COSMIC the Secret Service backend is gnome-keyring;
 it must be running for either applet to remember credentials.
 
 ```sh
-just release             # release build + user install into ~/.local for every applet
+just release             # release build + user install into ~/.local for every applet,
+                         # then restart cosmic-panel so it picks up the new binaries
                          # (use `sudo just install-system` after this for /usr)
 ```
 
@@ -84,8 +85,8 @@ If you only want one applet:
 just release cosmic-applet-gmail         # or any other workspace crate
 ```
 
-For tight dev-loop iteration on a single applet (release-fast build, user
-install, restart `cosmic-panel`):
+For tight dev-loop iteration on a single applet (same install + panel
+restart, but with the `release-fast` profile for quicker compiles):
 
 ```sh
 just dev cosmic-applet-gmail
