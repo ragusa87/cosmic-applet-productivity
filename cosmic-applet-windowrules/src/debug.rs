@@ -2,15 +2,18 @@ use cosmic::iced::futures::StreamExt;
 
 use crate::wayland::{WlEvent, run as wl_run};
 
-/// CLI debug mode: stream every wayland subscription event to stdout. Runs
-/// until SIGINT or the channel closes. Mirrors what the panel applet's iced
-/// subscription receives, so you can verify what `app_ids` / titles your live
-/// session is emitting before writing a rule.
+/// CLI debug mode: stream every wayland subscription event to stdout.
 pub fn run() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime");
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("failed to build tokio runtime: {e}");
+            return;
+        }
+    };
     runtime.block_on(async move {
         let stream = wl_run();
         tokio::pin!(stream);
