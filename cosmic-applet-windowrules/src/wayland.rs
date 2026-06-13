@@ -140,7 +140,7 @@ pub fn run() -> impl cosmic::iced::futures::Stream<Item = WlEvent> {
         std::thread::Builder::new()
             .name("windowrules-wayland".into())
             .spawn(move || {
-                if let Err(e) = wayland_main(event_tx, cmd_rx, stop_thread) {
+                if let Err(e) = wayland_main(event_tx, cmd_rx, &stop_thread) {
                     tracing::error!(error = %e, "wayland thread exited with error");
                 }
             })
@@ -179,7 +179,7 @@ pub fn run() -> impl cosmic::iced::futures::Stream<Item = WlEvent> {
 fn wayland_main(
     event_tx: tokio::sync::mpsc::UnboundedSender<WlEvent>,
     cmd_rx: calloop::channel::Channel<WlCommand>,
-    stop: Arc<AtomicBool>,
+    stop: &Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let conn =
         Connection::connect_to_env().map_err(|e| anyhow::anyhow!("connect to wayland: {e}"))?;
@@ -218,7 +218,7 @@ fn wayland_main(
         .map_err(|e| anyhow::anyhow!("insert wayland source: {e}"))?;
 
     loop_handle
-        .insert_source(cmd_rx, move |ev, _, data: &mut AppData| {
+        .insert_source(cmd_rx, move |ev, (), data: &mut AppData| {
             if let calloop::channel::Event::Msg(cmd) = ev {
                 data.handle_command(cmd);
             }

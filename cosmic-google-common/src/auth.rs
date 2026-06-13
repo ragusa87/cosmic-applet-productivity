@@ -64,6 +64,11 @@ fn expires_at_from(token: &impl TokenResponse) -> u64 {
 
 /// Drive the full PKCE + loopback flow. Opens the browser, listens for the
 /// redirect, exchanges the code, returns fully-populated `Tokens`.
+///
+/// # Errors
+///
+/// Returns an error if the loopback listener can't bind, the browser can't be
+/// opened, the redirect can't be parsed, or Google rejects the code exchange.
 pub async fn start_oauth_flow(
     params: OAuthParams<'_>,
     client_id: String,
@@ -137,6 +142,11 @@ pub async fn start_oauth_flow(
 
 /// Exchange a refresh token for a new access token. Re-uses the existing
 /// `refresh_token` if Google does not return a new one (which is the norm).
+///
+/// # Errors
+///
+/// Returns an error if the OAuth client can't be built or Google rejects the
+/// refresh request.
 pub async fn refresh(client_id: &str, tokens: &Tokens) -> Result<Tokens> {
     let client = build_client(client_id, &tokens.client_secret, "http://127.0.0.1")?;
     let http = http_client()?;

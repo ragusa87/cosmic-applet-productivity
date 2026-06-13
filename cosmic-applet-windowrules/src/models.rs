@@ -22,8 +22,8 @@ pub struct Rule {
     pub switch_to_workspace: bool,
     /// Skip toplevels with an empty title. The cosmic/ext protocols don't
     /// expose a parent/child or "is modal" flag, so empty-title is the only
-    /// signal we have for transient popups (e.g. JetBrains' search overlay
-    /// shares the IDE's app_id but has no title and shouldn't be moved).
+    /// signal we have for transient popups (e.g. `JetBrains`' search overlay
+    /// shares the IDE's `app_id` but has no title and shouldn't be moved).
     #[serde(default = "default_skip_empty_title")]
     pub skip_empty_title: bool,
     pub mode: ApplyMode,

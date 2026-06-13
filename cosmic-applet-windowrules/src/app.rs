@@ -165,13 +165,13 @@ impl AppModel {
                 );
             }
             WlEvent::NewToplevel(snap) => {
-                self.handle_new_toplevel(snap);
+                self.handle_new_toplevel(&snap);
             }
         }
         Task::none()
     }
 
-    fn handle_new_toplevel(&mut self, snap: ToplevelSnapshot) {
+    fn handle_new_toplevel(&mut self, snap: &ToplevelSnapshot) {
         // Reload from disk so rules edited in the settings window apply
         // without restarting the panel applet. cosmic-config reads are cheap.
         self.config = Config::load();
@@ -183,7 +183,7 @@ impl AppModel {
             "applet: new toplevel"
         );
 
-        let Some(rule) = self.find_matching_rule(&snap) else {
+        let Some(rule) = self.find_matching_rule(snap) else {
             return;
         };
         tracing::info!(
