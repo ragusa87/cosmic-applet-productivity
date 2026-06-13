@@ -471,8 +471,10 @@ impl SettingsApp {
 /// statuses in the destructive (red) accent. Must be a free `fn` since
 /// `Text::Custom` takes a function pointer (no captures).
 fn error_text_style(theme: &cosmic::Theme) -> cosmic::iced::widget::text::Style {
+    let palette = theme.cosmic();
     cosmic::iced::widget::text::Style {
-        color: Some(theme.cosmic().destructive_text_color().into()),
+        color: Some(palette.destructive_text_color().into()),
+        selected_fill: palette.accent_color().into(),
     }
 }
 
