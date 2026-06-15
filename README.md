@@ -9,9 +9,9 @@ A bundle of COSMIC desktop panel applets:
 
 | Applet | Binary | What it shows | Icon |
 |---|---|---|---|
-| [Gmail Unread](#gmail-applet) | `cosmic-applet-gmail` | Number of unread Gmail messages, refreshed periodically. |![gmail-preview.png](cosmic-applet-gmail/gmail-preview.png)|
-| [Next meeting](#google-agenda-applet) | `cosmic-applet-google-agenda` | Next Google Calendar event with a live countdown, plus a desktop notification a few minutes before it starts. |![calendar-preview.png](cosmic-applet-google-agenda/calendar-preview.png)|
-| [Taxi tracker](#taxi-tracker-applet) | `cosmic-applet-taxi` | Multi-timer time tracking with daily auto-export to `taxi` (e.g. Liip's Zebra). |![taxi-preview.png](cosmic-applet-taxi/taxi-preview.png)|
+| [Gmail Unread](#gmail-applet) | `cosmic-applet-gmail` | Number of unread Gmail messages, refreshed periodically. Requires a [Google Cloud OAuth client](#one-time-google-cloud-setup) (you create the access token). |![gmail-preview.png](cosmic-applet-gmail/gmail-preview.png)|
+| [Next meeting](#google-agenda-applet) | `cosmic-applet-google-agenda` | Next Google Calendar event with a live countdown, plus a desktop notification a few minutes before it starts. Requires a [Google Cloud OAuth client](#one-time-google-cloud-setup) (you create the access token). |![calendar-preview.png](cosmic-applet-google-agenda/calendar-preview.png)|
+| [Taxi tracker](#taxi-tracker-applet) | `cosmic-applet-taxi` | Multi-timer time tracking with daily auto-export to [`taxi`](https://github.com/sephii/taxi) (e.g. Liip's Zebra). |![taxi-preview.png](cosmic-applet-taxi/taxi-preview.png)|
 | [Slack Unread](#slack-applet) | `cosmic-applet-slack` | Badge mirroring Slack's tray-icon ToolTip — pulled over DBus, no Slack API, no token. |![slack-preview.png](cosmic-applet-slack/slack-preview.png)|
 | [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project, MIT-licensed. |![quotabar-preview.png](cosmic-applet-quotabar/quotabar-preview.png)|
 | [Window Rules](#windowrules-applet) | `cosmic-applet-windowrules` | Assigns windows to a chosen workspace by `app_id` on first appearance — COSMIC counterpart of KDE's KWin Window Rules. |![windowrules-preview.png](cosmic-applet-windowrules/windowrules-preview.png)|
@@ -158,15 +158,6 @@ Or, to signal every applet at once:
 ```sh
 just refresh
 ```
-
-On receiving SIGUSR2, the Google applets reload the OAuth tokens from
-Secret Service and fetch right away; the taxi applet reloads its state
-file and re-detects `uv`; the Slack applet wakes the DBus discovery loop
-and re-reads the StatusNotifierItem tooltip; the QuotaBar applet
-re-reads the local Claude / Codex OAuth files and refetches both
-providers' usage. The settings windows (running under the same binary
-names) ignore SIGUSR2, so sending the signal to all processes with that
-name is safe — only the panel applet acts on it.
 
 ### Pre-filling credentials from the environment
 
