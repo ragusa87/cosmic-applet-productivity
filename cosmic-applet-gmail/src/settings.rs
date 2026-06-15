@@ -69,13 +69,11 @@ impl cosmic::Application for SettingsApp {
             })
             .unwrap_or_default();
 
-        let mut form = CredentialsForm {
+        let form = CredentialsForm {
             email: config.email.clone(),
             client_id: config.client_id.clone(),
             ..CredentialsForm::default()
         };
-        form.fill_ids_from_env();
-        form.fill_secret_from_env();
 
         let task = if config.is_configured() {
             let email = config.email.clone();

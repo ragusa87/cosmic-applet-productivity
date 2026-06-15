@@ -23,22 +23,6 @@ pub struct CredentialsForm {
 }
 
 impl CredentialsForm {
-    pub fn fill_ids_from_env(&mut self) {
-        if self.client_id.is_empty()
-            && let Ok(v) = std::env::var("AGENDA_PANEL_CLIENT_ID")
-        {
-            self.client_id = v;
-        }
-    }
-
-    pub fn fill_secret_from_env(&mut self) {
-        if self.client_secret.is_empty()
-            && let Ok(v) = std::env::var("AGENDA_PANEL_CLIENT_SECRET")
-        {
-            self.client_secret = v;
-        }
-    }
-
     pub fn is_complete(&self) -> bool {
         !self.email.is_empty() && !self.client_id.is_empty() && !self.client_secret.is_empty()
     }
