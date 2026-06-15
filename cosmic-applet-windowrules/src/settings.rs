@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use cosmic::Element;
 use cosmic::app::Task;
 use cosmic::iced::{self, Alignment, Length, Size, Subscription};
@@ -8,7 +10,10 @@ use uuid::Uuid;
 
 use crate::config::{APP_ID, Config};
 use crate::models::{Rule, WorkspaceTarget};
-use crate::wayland::{ToplevelSnapshot, WlEvent, WorkspaceSnapshot, run as wl_run};
+use crate::wayland::{
+    ToplevelRef, ToplevelSnapshot, WlCommand, WlEvent, WlSender, WorkspaceRef, WorkspaceSnapshot,
+    run as wl_run,
+};
 
 pub fn run() -> iced::Result {
     let settings = cosmic::app::Settings::default().size(Size::new(680.0, 600.0));
@@ -28,7 +33,25 @@ pub struct SettingsApp {
     toplevel_labels: Vec<String>,
     form: Form,
     status: Option<Status>,
+    sender: Option<WlSender>,
+    try_results: HashMap<Uuid, TryResultEntry>,
+    next_try_token: u64,
 }
+
+#[derive(Debug, Clone)]
+struct TryResultEntry {
+    token: u64,
+    outcome: TryOutcome,
+}
+
+#[derive(Debug, Clone)]
+enum TryOutcome {
+    Moved { count: usize, target: String },
+    NoMatch,
+    NoSender,
+}
+
+const TRY_RESULT_TTL_SECS: u64 = 3;
 
 #[derive(Debug, Clone)]
 enum Status {
@@ -107,6 +130,11 @@ pub enum Msg {
     CancelEdit,
     DeleteRule(Uuid),
     ToggleEnabled(Uuid),
+    TryNow(Uuid),
+    ClearTryResult {
+        id: Uuid,
+        token: u64,
+    },
     OpenWorkspaceOverview,
     OverviewResult(Result<(), String>),
 }
@@ -165,7 +193,13 @@ impl cosmic::Application for SettingsApp {
         } else {
             let mut col = Column::new().spacing(6);
             for r in &self.config.rules {
-                col = col.push(rule_row(r, &self.workspaces, form_open, editing_id));
+                col = col.push(rule_row(
+                    r,
+                    &self.workspaces,
+                    form_open,
+                    editing_id,
+                    self.try_results.get(&r.id).map(|e| &e.outcome),
+                ));
             }
             col.into()
         };
@@ -237,6 +271,12 @@ impl cosmic::Application for SettingsApp {
             }
             Msg::DeleteRule(id) => self.delete_rule(id),
             Msg::ToggleEnabled(id) => self.toggle_enabled(id),
+            Msg::TryNow(id) => return self.try_now(id),
+            Msg::ClearTryResult { id, token } => {
+                if self.try_results.get(&id).is_some_and(|e| e.token == token) {
+                    self.try_results.remove(&id);
+                }
+            }
             Msg::OpenWorkspaceOverview => {
                 return cosmic::task::future(async move {
                     let res = call_workspaces_show().await.map_err(|e| e.to_string());
@@ -279,7 +319,10 @@ impl SettingsApp {
                 self.toplevels = toplevels;
                 self.refresh_labels();
             }
-            WlEvent::Ready { .. } | WlEvent::NewToplevel(_) => {}
+            WlEvent::Ready { cmd_tx, .. } => {
+                self.sender = Some(cmd_tx);
+            }
+            WlEvent::NewToplevel(_) => {}
         }
     }
 
@@ -381,6 +424,7 @@ impl SettingsApp {
                 r.target_output = target_output;
                 r.switch_to_workspace = self.form.switch_to_workspace;
                 r.skip_empty_title = self.form.skip_empty_title;
+                self.try_results.remove(&id);
             } else {
                 self.status = Some(Status::error("Rule no longer exists."));
                 return;
@@ -436,6 +480,7 @@ impl SettingsApp {
 
     fn delete_rule(&mut self, id: Uuid) {
         self.config.rules.retain(|r| r.id != id);
+        self.try_results.remove(&id);
         if self.form.mode.editing_id() == Some(id) {
             self.form = Form::default();
         }
@@ -448,9 +493,69 @@ impl SettingsApp {
         if let Some(r) = self.config.rules.iter_mut().find(|r| r.id == id) {
             r.enabled = !r.enabled;
         }
+        // The "try now" outcome is tied to the rule's previous enabled state
+        // and target; clear it so the row doesn't show a stale caption while
+        // the rule sits in its new state.
+        self.try_results.remove(&id);
         if let Err(e) = self.config.save() {
             self.status = Some(Status::error(format!("Save failed: {e}")));
         }
+    }
+
+    fn try_now(&mut self, id: Uuid) -> Task<Msg> {
+        let Some(rule) = self.config.rules.iter().find(|r| r.id == id).cloned() else {
+            return Task::none();
+        };
+        let outcome = if let Some(sender) = self.sender.as_ref() {
+            let target_ref = match &rule.target {
+                WorkspaceTarget::ByName(n) => WorkspaceRef::Name(n.clone()),
+                WorkspaceTarget::ByIndex(i) => WorkspaceRef::Index(*i),
+            };
+            let output = rule.target_output.clone();
+
+            let mut count = 0usize;
+            for snap in &self.toplevels {
+                if !rule.matches(&snap.app_id, &snap.title) {
+                    continue;
+                }
+                sender.send(WlCommand::MoveToplevelToWorkspace {
+                    toplevel: ToplevelRef(snap.identifier.clone()),
+                    workspace: target_ref.clone(),
+                    output: output.clone(),
+                });
+                count += 1;
+            }
+
+            if count > 0 && rule.switch_to_workspace {
+                sender.send(WlCommand::ActivateWorkspace {
+                    workspace: target_ref,
+                    output,
+                });
+            }
+
+            if count == 0 {
+                TryOutcome::NoMatch
+            } else {
+                TryOutcome::Moved {
+                    count,
+                    target: render_target(&rule, &self.workspaces),
+                }
+            }
+        } else {
+            TryOutcome::NoSender
+        };
+
+        // Bump the token so a still-pending clear-timer from a previous
+        // click on this row can't wipe the fresh outcome.
+        self.next_try_token = self.next_try_token.wrapping_add(1);
+        let token = self.next_try_token;
+        self.try_results
+            .insert(id, TryResultEntry { token, outcome });
+
+        cosmic::task::future(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(TRY_RESULT_TTL_SECS)).await;
+            Msg::ClearTryResult { id, token }
+        })
     }
 
     fn form_card(&self) -> Element<'_, Msg> {
@@ -572,6 +677,7 @@ fn rule_row<'a>(
     workspaces: &'a [WorkspaceSnapshot],
     form_open: bool,
     editing_id: Option<Uuid>,
+    try_outcome: Option<&TryOutcome>,
 ) -> Element<'a, Msg> {
     let target_str = render_target(r, workspaces);
     let switch_suffix = if r.switch_to_workspace {
@@ -599,13 +705,28 @@ fn rule_row<'a>(
     }
     let del_btn = button::destructive("Delete").on_press(Msg::DeleteRule(r.id));
 
+    // Try-now: only actionable when the rule is enabled AND no form is open.
+    let mut try_link = button::link("try now");
+    if r.enabled && !form_open {
+        try_link = try_link.on_press(Msg::TryNow(r.id));
+    }
+
+    let buttons_row = Row::new().spacing(8).push(edit_btn).push(del_btn);
+    let mut actions = Column::new()
+        .spacing(2)
+        .align_x(Alignment::End)
+        .push(buttons_row)
+        .push(try_link);
+    if let Some(outcome) = try_outcome {
+        actions = actions.push(try_outcome_caption(outcome));
+    }
+
     let row = Row::new()
         .align_y(Alignment::Center)
         .spacing(10)
         .push(enabled_toggle)
         .push(summary)
-        .push(edit_btn)
-        .push(del_btn);
+        .push(actions);
 
     let class = if is_being_edited {
         cosmic::theme::Container::Primary
@@ -617,6 +738,19 @@ fn rule_row<'a>(
         .width(Length::Fill)
         .class(class)
         .into()
+}
+
+fn try_outcome_caption<'a>(outcome: &TryOutcome) -> Element<'a, Msg> {
+    match outcome {
+        TryOutcome::Moved { count, target } => {
+            let noun = if *count == 1 { "window" } else { "windows" };
+            text::caption(format!("Moved {count} {noun} to workspace {target}.")).into()
+        }
+        TryOutcome::NoMatch => text::caption("No matching windows.").into(),
+        TryOutcome::NoSender => text::caption("Wayland not ready — try again in a moment.")
+            .class(cosmic::theme::Text::Custom(error_text_style))
+            .into(),
+    }
 }
 
 // Prefer the rule's saved `target_output` (authoritative on multi-monitor
