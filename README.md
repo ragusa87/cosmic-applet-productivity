@@ -14,7 +14,7 @@ A bundle of COSMIC desktop panel applets:
 | [Taxi tracker](#taxi-tracker-applet) | `cosmic-applet-taxi` | Multi-timer time tracking with daily auto-export to [`taxi`](https://github.com/sephii/taxi) (e.g. Liip's Zebra). |![taxi-preview.png](cosmic-applet-taxi/taxi-preview.png)|
 | [Slack Unread](#slack-applet) | `cosmic-applet-slack` | Badge mirroring Slack's tray-icon ToolTip — pulled over DBus, no Slack API, no token. |![slack-preview.png](cosmic-applet-slack/slack-preview.png)|
 | [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project, MIT-licensed. |![quotabar-preview.png](cosmic-applet-quotabar/quotabar-preview.png)|
-| [Window Rules](#windowrules-applet) | `cosmic-applet-windowrules` | Assigns windows to a chosen workspace by `app_id` on first appearance — COSMIC counterpart of KDE's KWin Window Rules. |![windowrules-preview.png](cosmic-applet-windowrules/windowrules-preview.png)|
+| [Window Rules](#window-rules-applet) | `cosmic-applet-windowrules` | Assigns windows to a chosen workspace by `app_id` on first appearance — COSMIC counterpart of KDE's KWin Window Rules. |![windowrules-preview.png](cosmic-applet-windowrules/windowrules-preview.png)|
 
 Jump to a per-applet section below for what each one shows, how to
 configure it, and the troubleshooting knobs. Contributors / AI agents:
@@ -457,9 +457,9 @@ fired). **Right-click** opens a one-item menu with **Settings…**,
 which spawns the standalone rule editor as a regular Wayland toplevel
 (survives focus changes).
 
-**The rule editor** ([screenshot](cosmic-applet-windowrules/windowrules-settings.png)):
+**The rule editor:**
 
-![windowrules-settings.png](cosmic-applet-windowrules/windowrules-settings.png)
+![Rule editor — three saved rules (Spotify, jetbrains-pycharm, slack) each with Edit / Delete buttons and a "try now" link.](cosmic-applet-windowrules/windowrules-settings.png)
 
 It lets you:
 
