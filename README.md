@@ -159,24 +159,6 @@ Or, to signal every applet at once:
 just refresh
 ```
 
-### Pre-filling credentials from the environment
-
-For local development, the client ID and secret are read from environment
-variables when the form field is empty:
-
-```sh
-# Gmail applet
-export GMAIL_APPLET_CLIENT_ID=...apps.googleusercontent.com
-export GMAIL_APPLET_CLIENT_SECRET=GOCSPX-...
-
-# Agenda applet
-export AGENDA_PANEL_CLIENT_ID=...apps.googleusercontent.com
-export AGENDA_PANEL_CLIENT_SECRET=GOCSPX-...
-```
-
-A persisted value (from a previous **Authorize** click) always wins over
-the environment.
-
 ## Gmail applet
 
 Reads the unread count via the Gmail API's
