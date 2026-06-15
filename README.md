@@ -516,7 +516,11 @@ fired). **Right-click** opens a one-item menu with **Settings…**,
 which spawns the standalone rule editor as a regular Wayland toplevel
 (survives focus changes).
 
-**The rule editor** lets you:
+**The rule editor** ([screenshot](cosmic-applet-windowrules/windowrules-settings.png)):
+
+![windowrules-settings.png](cosmic-applet-windowrules/windowrules-settings.png)
+
+It lets you:
 
 - **Pick a target window from a dropdown** of currently-open toplevels
   — clicking one autofills the App ID, so you don't need to memorise
@@ -532,7 +536,12 @@ which spawns the standalone rule editor as a regular Wayland toplevel
   remembers which one you picked.
 - Toggle **"Switch to the chosen workspace"** if you want the rule to
   also focus the destination after moving the window. Off by default.
-- Each saved rule has **Edit / Disable / Delete** buttons. The
+- Each saved rule has **Edit / Disable / Delete** buttons, plus a
+  **try now** link that scans the currently-open toplevels and applies
+  the rule to any matching window on demand (so existing windows don't
+  have to be reopened to pick up a freshly-added rule). The result —
+  "Moved N window(s) to workspace …" or "No matching windows." — shows
+  under the row for a few seconds and then fades. The
   rule-uniqueness check rejects two rules with the same
   `(app_id, title_filter)` tuple — handy for catching "I created two
   Spotify rules going to different workspaces" mistakes.
