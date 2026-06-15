@@ -3,3 +3,4 @@
 vendor/
 vendor.tar
 *.swp
+.claude
