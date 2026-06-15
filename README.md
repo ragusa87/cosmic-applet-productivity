@@ -5,11 +5,7 @@
 > credentials before relying on it, and treat the code as a starting
 > point rather than production-grade software.
 
-A bundle of COSMIC desktop panel applets — two that surface bits of your Google
-account, one that tracks time and exports to a [taxi](https://github.com/sephii/taxi)
-timesheet, one that mirrors the Slack tray-icon unread count by reading
-its DBus tooltip, one that surfaces your OpenAI + Anthropic AI API
-usage, and one that assigns windows to workspaces by App ID, in the panel:
+A bundle of COSMIC desktop panel applets:
 
 | Applet | Binary | What it shows | Icon |
 |---|---|---|---|
@@ -20,38 +16,10 @@ usage, and one that assigns windows to workspaces by App ID, in the panel:
 | [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project, MIT-licensed. |![quotabar-preview.png](cosmic-applet-quotabar/quotabar-preview.png)|
 | [Window Rules](#windowrules-applet) | `cosmic-applet-windowrules` | Assigns windows to a chosen workspace by `app_id` on first appearance — COSMIC counterpart of KDE's KWin Window Rules. |![windowrules-preview.png](cosmic-applet-windowrules/windowrules-preview.png)|
 
-The two Google-backed applets follow the same model:
-
-- **Left-click** the panel item → opens a useful URL (Gmail inbox / next
-  event's Meet link, falling back to <https://calendar.google.com>).
-- **Right-click** → menu with **Credentials**. Selecting it spawns the same
-  binary with `--show-settings`, which runs as a regular Wayland toplevel
-  window (not a panel popup) so it survives focus changes — including
-  switching to a password manager to paste the secret.
-- Settings (email, OAuth client ID, intervals, toggles) live in cosmic-config.
-- Secrets (OAuth client secret, refresh token, access token) live in the
-  freedesktop Secret Service (e.g. gnome-keyring under COSMIC).
-- They share an OAuth + keyring helper crate ([`cosmic-google-common`](cosmic-google-common/)),
-  so adding more Google-backed applets later only requires implementing the
-  applet-specific UI and API call.
-
-`cosmic-applet-taxi` is unrelated to Google — it tracks local time and
-pushes merged + rounded sessions to your `~/zebra/%Y/%m.tks` timesheet
-via the `taxi` CLI (invoked through `uv run`).
-
-`cosmic-applet-slack` is also unrelated to Google — it queries the
-session bus for Slack's `StatusNotifierItem` and parses the unread count
-out of the tooltip text. No OAuth, no Slack API, no token; it just
-mirrors whatever Slack already publishes to the desktop's tray protocol.
-
-`cosmic-applet-quotabar` is a Rust / libcosmic port of
-[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) (the project
-formerly known as `QuotaBar`). It reads the OAuth sessions that
-[Claude Code](https://claude.com/claude-code) and
-[Codex](https://github.com/openai/codex) already keep on disk and hits
-each provider's usage endpoint, so there's nothing to configure — if
-you've logged into either CLI, the panel just shows your remaining
-5-hour and weekly quotas. MIT-licensed to match upstream.
+Jump to a per-applet section below for what each one shows, how to
+configure it, and the troubleshooting knobs. Contributors / AI agents:
+see [`AGENTS.md`](AGENTS.md) for the architectural notes (shared
+plumbing, two-mode binary layout, per-crate invariants).
 
 ## Build & install
 
