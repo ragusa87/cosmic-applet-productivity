@@ -1,4 +1,5 @@
 mod app;
+mod apply;
 mod config;
 mod dbus;
 mod debug;

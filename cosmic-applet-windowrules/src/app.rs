@@ -5,6 +5,7 @@ use cosmic::iced::{Limits, Subscription, window::Id};
 use cosmic::surface::{self, action::destroy_popup};
 use cosmic::widget::{Column, button, text};
 
+use crate::apply;
 use crate::config::{APP_ID, Config};
 use crate::models::Rule;
 use crate::wayland::{
@@ -19,6 +20,7 @@ pub struct AppModel {
     core: cosmic::Core,
     config: Config,
     workspaces: Vec<WorkspaceSnapshot>,
+    toplevels: Vec<ToplevelSnapshot>,
     caps: ManagerCaps,
     sender: Option<WlSender>,
     menu_popup: Option<Id>,
@@ -30,6 +32,7 @@ pub enum Message {
     LeftClick,
     OpenMenu,
     OpenSettings,
+    ApplyAllRules,
     PopupClosed(Id),
     OverviewResult(Result<(), String>),
     NoOp,
@@ -55,6 +58,7 @@ impl cosmic::Application for AppModel {
                 core,
                 config: Config::load(),
                 workspaces: Vec::new(),
+                toplevels: Vec::new(),
                 caps: ManagerCaps::empty(),
                 sender: None,
                 menu_popup: None,
@@ -127,6 +131,7 @@ impl cosmic::Application for AppModel {
                     .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
                 return Task::batch([close, spawn_settings_window()]);
             }
+            Message::ApplyAllRules => return self.apply_all_rules(),
             Message::PopupClosed(id) => {
                 if self.menu_popup.as_ref() == Some(&id) {
                     self.menu_popup = None;
@@ -157,12 +162,14 @@ impl AppModel {
             WlEvent::Snapshot {
                 caps,
                 workspaces,
-                toplevels: _,
+                toplevels,
             } => {
                 self.caps = caps;
                 self.workspaces = workspaces;
+                self.toplevels = toplevels;
                 tracing::debug!(
                     workspaces = self.workspaces.len(),
+                    toplevels = self.toplevels.len(),
                     "applet: snapshot received"
                 );
             }
@@ -240,11 +247,50 @@ impl AppModel {
     }
 
     fn menu_view(&self) -> Element<'_, Message> {
+        let has_enabled_rules = self.config.rules.iter().any(|r| r.enabled);
+        let mut apply_item = menu_button(text::body("Apply all rules"));
+        if has_enabled_rules {
+            apply_item = apply_item.on_press(Message::ApplyAllRules);
+        }
         let body = Column::new()
             .padding(4)
             .spacing(0)
+            .push(apply_item)
             .push(menu_button(text::body("Settings…")).on_press(Message::OpenSettings));
         Element::from(self.core.applet.popup_container(body))
+    }
+
+    fn apply_all_rules(&mut self) -> Task<Message> {
+        // Reload from disk so rules edited in the settings window apply
+        // without restarting the panel applet — mirrors `handle_new_toplevel`.
+        self.config = Config::load();
+
+        let close = self
+            .menu_popup
+            .take()
+            .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+
+        let Some(sender) = self.sender.as_ref() else {
+            tracing::warn!("apply all: wayland not ready");
+            return close;
+        };
+
+        let mut total = 0usize;
+        let mut rules_fired = 0usize;
+        for rule in self.config.rules.iter().filter(|r| r.enabled) {
+            let n = apply::apply_rule(rule, &self.toplevels, sender, false);
+            if n > 0 {
+                rules_fired += 1;
+                total += n;
+            }
+        }
+        tracing::info!(
+            total,
+            rules_fired,
+            rules_total = self.config.rules.len(),
+            "applet: apply all rules"
+        );
+        close
     }
 }
 
