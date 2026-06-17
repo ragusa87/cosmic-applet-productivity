@@ -183,6 +183,17 @@ impl AppModel {
                 );
             }
             WlEvent::NewToplevel(snap) => {
+                // Upsert into self.toplevels so "Apply all rules" sees the
+                // window even if clicked before the next Snapshot arrives.
+                if let Some(existing) = self
+                    .toplevels
+                    .iter_mut()
+                    .find(|t| t.identifier == snap.identifier)
+                {
+                    *existing = snap.clone();
+                } else {
+                    self.toplevels.push(snap.clone());
+                }
                 self.handle_new_toplevel(&snap);
             }
         }
