@@ -35,6 +35,7 @@ pub enum Message {
     ApplyAllRules,
     PopupClosed(Id),
     OverviewResult(Result<(), String>),
+    UpdateConfig(Config),
     NoOp,
 }
 
@@ -72,7 +73,12 @@ impl cosmic::Application for AppModel {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        Subscription::run(wl_run).map(Message::WlEvt)
+        let wl = Subscription::run(wl_run).map(Message::WlEvt);
+        let watch = self
+            .core()
+            .watch_config::<Config>(Self::APP_ID)
+            .map(|u| Message::UpdateConfig(u.config));
+        Subscription::batch([wl, watch])
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
@@ -141,6 +147,9 @@ impl cosmic::Application for AppModel {
             Message::OverviewResult(Err(e)) => {
                 tracing::warn!(error = %e, "failed to open workspace overview");
             }
+            Message::UpdateConfig(config) => {
+                self.config = config;
+            }
             Message::NoOp => {}
         }
         Task::none()
@@ -181,9 +190,6 @@ impl AppModel {
     }
 
     fn handle_new_toplevel(&mut self, snap: &ToplevelSnapshot) {
-        // Reload from disk so rules edited in the settings window apply
-        // without restarting the panel applet. cosmic-config reads are cheap.
-        self.config = Config::load();
         tracing::debug!(
             app_id = %snap.app_id,
             title = %snap.title,
@@ -261,10 +267,6 @@ impl AppModel {
     }
 
     fn apply_all_rules(&mut self) -> Task<Message> {
-        // Reload from disk so rules edited in the settings window apply
-        // without restarting the panel applet — mirrors `handle_new_toplevel`.
-        self.config = Config::load();
-
         let close = self
             .menu_popup
             .take()
