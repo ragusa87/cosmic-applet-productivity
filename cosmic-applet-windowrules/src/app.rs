@@ -21,8 +21,6 @@ pub struct AppModel {
     workspaces: Vec<WorkspaceSnapshot>,
     caps: ManagerCaps,
     sender: Option<WlSender>,
-    last_action: Option<String>,
-    info_popup: Option<Id>,
     menu_popup: Option<Id>,
 }
 
@@ -33,6 +31,7 @@ pub enum Message {
     OpenMenu,
     OpenSettings,
     PopupClosed(Id),
+    OverviewResult(Result<(), String>),
     NoOp,
 }
 
@@ -58,8 +57,6 @@ impl cosmic::Application for AppModel {
                 workspaces: Vec::new(),
                 caps: ManagerCaps::empty(),
                 sender: None,
-                last_action: None,
-                info_popup: None,
                 menu_popup: None,
             },
             Task::none(),
@@ -106,18 +103,14 @@ impl cosmic::Application for AppModel {
         self.core.applet.autosize_window(interactive).into()
     }
 
-    fn view_window(&self, id: Id) -> Element<'_, Self::Message> {
-        if self.menu_popup == Some(id) {
-            self.menu_view()
-        } else {
-            self.info_view()
-        }
+    fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
+        self.menu_view()
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
         match message {
             Message::WlEvt(ev) => return self.on_wl(ev),
-            Message::LeftClick => return self.toggle_info_popup(),
+            Message::LeftClick => return open_workspace_overview(),
             Message::OpenMenu => return self.toggle_menu_popup(),
             Message::OpenSettings => {
                 let close = self
@@ -127,12 +120,13 @@ impl cosmic::Application for AppModel {
                 return Task::batch([close, spawn_settings_window()]);
             }
             Message::PopupClosed(id) => {
-                if self.info_popup.as_ref() == Some(&id) {
-                    self.info_popup = None;
-                }
                 if self.menu_popup.as_ref() == Some(&id) {
                     self.menu_popup = None;
                 }
+            }
+            Message::OverviewResult(Ok(())) => {}
+            Message::OverviewResult(Err(e)) => {
+                tracing::warn!(error = %e, "failed to open workspace overview");
             }
             Message::NoOp => {}
         }
@@ -219,7 +213,6 @@ impl AppModel {
                 output,
             });
         }
-        self.last_action = Some(format!("{} → {}", snap.app_id, rule.target.display()));
     }
 
     fn find_matching_rule(&self, snap: &ToplevelSnapshot) -> Option<&Rule> {
@@ -229,56 +222,13 @@ impl AppModel {
             .find(|r| r.matches(&snap.app_id, &snap.title))
     }
 
-    fn toggle_info_popup(&mut self) -> Task<Message> {
-        // If the right-click menu is up, close it first so we don't stack popups.
-        let close_menu = self
-            .menu_popup
-            .take()
-            .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
-        // Toggle the info popup itself.
-        if let Some(id) = self.info_popup.take() {
-            return Task::batch([close_menu, dispatch_surface(destroy_popup(id))]);
-        }
-        let new_id = Id::unique();
-        self.info_popup = Some(new_id);
-        Task::batch([close_menu, open_info_popup(new_id)])
-    }
-
     fn toggle_menu_popup(&mut self) -> Task<Message> {
-        let close_info = self
-            .info_popup
-            .take()
-            .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
         if let Some(id) = self.menu_popup.take() {
-            return Task::batch([close_info, dispatch_surface(destroy_popup(id))]);
+            return dispatch_surface(destroy_popup(id));
         }
         let new_id = Id::unique();
         self.menu_popup = Some(new_id);
-        Task::batch([close_info, open_menu_popup(new_id)])
-    }
-
-    fn info_view(&self) -> Element<'_, Message> {
-        let total = self.config.rules.len();
-        let enabled = self.config.rules.iter().filter(|r| r.enabled).count();
-        let cap_line = if self.caps.contains(ManagerCaps::MOVE_TO_EXT_WORKSPACE) {
-            "move_to_ext_workspace: advertised"
-        } else if self.caps.is_empty() {
-            "probing compositor…"
-        } else {
-            "move_to_ext_workspace: attempting (not advertised)"
-        };
-        let last = match &self.last_action {
-            Some(s) => s.clone(),
-            None => "No rule has fired yet.".into(),
-        };
-        let body = Column::new()
-            .padding(12)
-            .spacing(6)
-            .push(text::title4("Window Rules"))
-            .push(text::body(format!("{enabled} enabled / {total} total")))
-            .push(text::caption(cap_line))
-            .push(text::caption(last));
-        Element::from(self.core.applet.popup_container(body))
+        open_menu_popup(new_id)
     }
 
     fn menu_view(&self) -> Element<'_, Message> {
@@ -311,27 +261,24 @@ fn spawn_settings_window() -> Task<Message> {
     })
 }
 
-fn open_info_popup(new_id: Id) -> Task<Message> {
-    let action = surface::action::app_popup::<AppModel>(
-        move |state: &mut AppModel| {
-            let parent = state.core.main_window_id().unwrap_or(Id::NONE);
-            let mut settings = state
-                .core
-                .applet
-                .get_popup_settings(parent, new_id, None, None, None);
-            settings.grab = true;
-            settings.positioner.size_limits = Limits::NONE
-                .max_width(420.0)
-                .min_width(280.0)
-                .min_height(100.0)
-                .max_height(280.0);
-            settings
-        },
-        Some(Box::new(|state: &AppModel| {
-            Element::from(state.info_view()).map(cosmic::Action::App)
-        })),
-    );
-    dispatch_surface(action)
+fn open_workspace_overview() -> Task<Message> {
+    cosmic::task::future(async move {
+        let res = call_workspaces_show().await.map_err(|e| e.to_string());
+        Message::OverviewResult(res)
+    })
+}
+
+async fn call_workspaces_show() -> zbus::Result<()> {
+    let conn = zbus::Connection::session().await?;
+    conn.call_method(
+        Some("com.system76.CosmicWorkspaces"),
+        "/com/system76/CosmicWorkspaces",
+        Some("com.system76.CosmicWorkspaces"),
+        "Show",
+        &(),
+    )
+    .await?;
+    Ok(())
 }
 
 fn open_menu_popup(new_id: Id) -> Task<Message> {
