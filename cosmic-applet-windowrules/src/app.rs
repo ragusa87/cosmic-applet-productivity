@@ -254,15 +254,12 @@ impl AppModel {
 
     fn menu_view(&self) -> Element<'_, Message> {
         let has_enabled_rules = self.config.rules.iter().any(|r| r.enabled);
-        let mut apply_item = menu_button(text::body("Apply all rules"));
+        let mut body = Column::new().padding(4).spacing(0);
         if has_enabled_rules {
-            apply_item = apply_item.on_press(Message::ApplyAllRules);
+            body = body
+                .push(menu_button(text::body("Apply all rules")).on_press(Message::ApplyAllRules));
         }
-        let body = Column::new()
-            .padding(4)
-            .spacing(0)
-            .push(apply_item)
-            .push(menu_button(text::body("Settings…")).on_press(Message::OpenSettings));
+        body = body.push(menu_button(text::body("Settings…")).on_press(Message::OpenSettings));
         Element::from(self.core.applet.popup_container(body))
     }
 
