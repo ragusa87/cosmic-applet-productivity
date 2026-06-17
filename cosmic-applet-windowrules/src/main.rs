@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod dbus;
 mod debug;
 mod models;
 mod settings;

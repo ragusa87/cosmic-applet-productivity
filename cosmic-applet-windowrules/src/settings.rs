@@ -279,7 +279,9 @@ impl cosmic::Application for SettingsApp {
             }
             Msg::OpenWorkspaceOverview => {
                 return cosmic::task::future(async move {
-                    let res = call_workspaces_show().await.map_err(|e| e.to_string());
+                    let res = crate::dbus::show_workspace_overview()
+                        .await
+                        .map_err(|e| e.to_string());
                     Msg::OverviewResult(res)
                 });
             }
@@ -292,19 +294,6 @@ impl cosmic::Application for SettingsApp {
         }
         Task::none()
     }
-}
-
-async fn call_workspaces_show() -> zbus::Result<()> {
-    let conn = zbus::Connection::session().await?;
-    conn.call_method(
-        Some("com.system76.CosmicWorkspaces"),
-        "/com/system76/CosmicWorkspaces",
-        Some("com.system76.CosmicWorkspaces"),
-        "Show",
-        &(),
-    )
-    .await?;
-    Ok(())
 }
 
 impl SettingsApp {

@@ -110,7 +110,15 @@ impl cosmic::Application for AppModel {
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
         match message {
             Message::WlEvt(ev) => return self.on_wl(ev),
-            Message::LeftClick => return open_workspace_overview(),
+            Message::LeftClick => {
+                // Close the grabbed right-click menu first so we don't leave
+                // an active input grab while the overview is showing.
+                let close = self
+                    .menu_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                return Task::batch([close, open_workspace_overview()]);
+            }
             Message::OpenMenu => return self.toggle_menu_popup(),
             Message::OpenSettings => {
                 let close = self
@@ -263,22 +271,11 @@ fn spawn_settings_window() -> Task<Message> {
 
 fn open_workspace_overview() -> Task<Message> {
     cosmic::task::future(async move {
-        let res = call_workspaces_show().await.map_err(|e| e.to_string());
+        let res = crate::dbus::show_workspace_overview()
+            .await
+            .map_err(|e| e.to_string());
         Message::OverviewResult(res)
     })
-}
-
-async fn call_workspaces_show() -> zbus::Result<()> {
-    let conn = zbus::Connection::session().await?;
-    conn.call_method(
-        Some("com.system76.CosmicWorkspaces"),
-        "/com/system76/CosmicWorkspaces",
-        Some("com.system76.CosmicWorkspaces"),
-        "Show",
-        &(),
-    )
-    .await?;
-    Ok(())
 }
 
 fn open_menu_popup(new_id: Id) -> Task<Message> {
