@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use cosmic::Element;
 use cosmic::app::Task;
 use cosmic::iced::widget::mouse_area;
@@ -31,6 +31,7 @@ pub struct AppModel {
     pub tokens: Option<Tokens>,
     pub events: Vec<Event>,
     pub next: Option<Event>,
+    pub idle_since: Option<DateTime<Utc>>,
     pub notified: HashSet<String>,
     pub stale: bool,
 }
@@ -132,10 +133,15 @@ impl cosmic::Application for AppModel {
             Color::from_rgb(0.30, 0.69, 0.31)
         };
 
-        let remaining = if busy && self.config.show_progress {
-            self.next
-                .as_ref()
-                .map_or(1.0, |ev| 1.0 - meeting_progress(now, ev))
+        let remaining = if self.config.show_progress {
+            self.next.as_ref().map_or(1.0, |ev| {
+                if busy {
+                    1.0 - meeting_progress(now, ev)
+                } else {
+                    let window_start = idle_window_start(self.idle_since, ev.start);
+                    1.0 - free_progress(now, window_start, ev.start)
+                }
+            })
         } else {
             1.0
         };
@@ -315,7 +321,7 @@ impl cosmic::Application for AppModel {
 
             Message::Tick => {
                 let now = Utc::now();
-                recompute_next(&mut self.events, &mut self.next, now);
+                recompute_next(&mut self.events, &mut self.next, &mut self.idle_since, now);
                 prune_notified(&self.events, &mut self.notified);
                 let lead = if self.config.notify {
                     u64::from(self.config.notification_lead_secs)
@@ -489,7 +495,17 @@ async fn refresh_and_fetch(
     Ok((tokens, events))
 }
 
-fn recompute_next(events: &mut Vec<Event>, next: &mut Option<Event>, now: DateTime<Utc>) {
+fn recompute_next(
+    events: &mut Vec<Event>,
+    next: &mut Option<Event>,
+    idle_since: &mut Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) {
+    if let Some(latest_end) = events.iter().filter(|e| e.end < now).map(|e| e.end).max()
+        && idle_since.is_none_or(|prev| latest_end > prev)
+    {
+        *idle_since = Some(latest_end);
+    }
     events.retain(|e| e.end >= now);
     *next = events.iter().find(|e| e.end >= now).cloned();
 }
@@ -621,6 +637,27 @@ fn meeting_progress(now: DateTime<Utc>, ev: &Event) -> f32 {
     frac.clamp(0.0, 1.0)
 }
 
+// Cap on the free-time window the icon visualises. Beyond this, the pie stays
+// full — the wedge is meant to be a short-term countdown to the next event,
+// not a multi-hour bar that's almost-empty all day.
+const FREE_WINDOW_CAP_HOURS: i64 = 1;
+
+fn idle_window_start(
+    idle_since: Option<DateTime<Utc>>,
+    next_start: DateTime<Utc>,
+) -> DateTime<Utc> {
+    let cap_start = next_start - Duration::hours(FREE_WINDOW_CAP_HOURS);
+    idle_since.map_or(cap_start, |d| d.max(cap_start))
+}
+
+fn free_progress(now: DateTime<Utc>, idle_since: DateTime<Utc>, next_start: DateTime<Utc>) -> f32 {
+    let total = (next_start - idle_since).num_seconds().max(1);
+    let elapsed = (now - idle_since).num_seconds().clamp(0, total);
+    #[allow(clippy::cast_precision_loss)]
+    let frac = elapsed as f32 / total as f32;
+    frac.clamp(0.0, 1.0)
+}
+
 fn label_widget(s: String, size: f32, bold: bool) -> Element<'static, Message> {
     use cosmic::iced::Color;
     let mut t = text(s).size(size).class(Color::WHITE);
@@ -700,9 +737,26 @@ mod tests {
             ev("later", 2, 3),
         ];
         let mut next = None;
-        recompute_next(&mut events, &mut next, ts(0, 0));
+        let mut idle_since = None;
+        recompute_next(&mut events, &mut next, &mut idle_since, ts(0, 0));
         assert_eq!(next.as_ref().map(|e| e.id.as_str()), Some("now-running"));
         assert_eq!(events.len(), 2);
+        assert_eq!(idle_since, Some(ts(-1, 0)));
+    }
+
+    #[test]
+    fn recompute_next_keeps_latest_idle_since() {
+        // First tick captures the end of a meeting that just ended.
+        let mut events = vec![ev("a", -2, -1), ev("b", 1, 2)];
+        let mut next = None;
+        let mut idle_since = None;
+        recompute_next(&mut events, &mut next, &mut idle_since, ts(0, 0));
+        assert_eq!(idle_since, Some(ts(-1, 0)));
+
+        // A later tick after `b` ends bumps `idle_since` forward.
+        recompute_next(&mut events, &mut next, &mut idle_since, ts(3, 0));
+        assert_eq!(idle_since, Some(ts(2, 0)));
+        assert!(next.is_none());
     }
 
     #[test]
@@ -763,6 +817,37 @@ mod tests {
         // Out-of-range times are clamped.
         assert!((meeting_progress(start - Duration::minutes(5), &event) - 0.0).abs() < 1e-6);
         assert!((meeting_progress(end + Duration::minutes(5), &event) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn free_progress_buckets() {
+        let start = ts(0, 0);
+        let next = ts(1, 0);
+        assert!((free_progress(start, start, next) - 0.0).abs() < 1e-6);
+        assert!((free_progress(start + Duration::minutes(30), start, next) - 0.5).abs() < 1e-6);
+        assert!((free_progress(next, start, next) - 1.0).abs() < 1e-6);
+        // Out-of-range times are clamped.
+        assert!((free_progress(start - Duration::minutes(5), start, next) - 0.0).abs() < 1e-6);
+        assert!((free_progress(next + Duration::minutes(5), start, next) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn idle_window_start_caps_long_or_missing_idle() {
+        let next = ts(0, 0);
+        let cap = next - Duration::hours(FREE_WINDOW_CAP_HOURS);
+
+        // No prior meeting end recorded: window starts cap-hours before next.
+        assert_eq!(idle_window_start(None, next), cap);
+
+        // Stale idle from yesterday: still capped.
+        assert_eq!(
+            idle_window_start(Some(next - Duration::hours(24)), next),
+            cap
+        );
+
+        // Recent idle inside the cap window wins (shorter, accurate interval).
+        let recent = next - Duration::minutes(15);
+        assert_eq!(idle_window_start(Some(recent), next), recent);
     }
 
     #[test]
