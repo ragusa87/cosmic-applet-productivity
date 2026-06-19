@@ -8,12 +8,10 @@ use cosmic::widget::{
 };
 use uuid::Uuid;
 
+use crate::apply;
 use crate::config::{APP_ID, Config};
 use crate::models::{Rule, WorkspaceTarget};
-use crate::wayland::{
-    ToplevelRef, ToplevelSnapshot, WlCommand, WlEvent, WlSender, WorkspaceRef, WorkspaceSnapshot,
-    run as wl_run,
-};
+use crate::wayland::{ToplevelSnapshot, WlEvent, WlSender, WorkspaceSnapshot, run as wl_run};
 
 pub fn run() -> iced::Result {
     let settings = cosmic::app::Settings::default().size(Size::new(680.0, 600.0));
@@ -495,43 +493,19 @@ impl SettingsApp {
         let Some(rule) = self.config.rules.iter().find(|r| r.id == id).cloned() else {
             return Task::none();
         };
-        let outcome = if let Some(sender) = self.sender.as_ref() {
-            let target_ref = match &rule.target {
-                WorkspaceTarget::ByName(n) => WorkspaceRef::Name(n.clone()),
-                WorkspaceTarget::ByIndex(i) => WorkspaceRef::Index(*i),
-            };
-            let output = rule.target_output.clone();
-
-            let mut count = 0usize;
-            for snap in &self.toplevels {
-                if !rule.matches(&snap.app_id, &snap.title) {
-                    continue;
-                }
-                sender.send(WlCommand::MoveToplevelToWorkspace {
-                    toplevel: ToplevelRef(snap.identifier.clone()),
-                    workspace: target_ref.clone(),
-                    output: output.clone(),
-                });
-                count += 1;
-            }
-
-            if count > 0 && rule.switch_to_workspace {
-                sender.send(WlCommand::ActivateWorkspace {
-                    workspace: target_ref,
-                    output,
-                });
-            }
-
-            if count == 0 {
-                TryOutcome::NoMatch
-            } else {
-                TryOutcome::Moved {
-                    count,
-                    target: render_target(&rule, &self.workspaces),
+        let outcome = match self.sender.as_ref() {
+            Some(sender) => {
+                let count = apply::apply_rule(&rule, &self.toplevels, sender, true);
+                if count == 0 {
+                    TryOutcome::NoMatch
+                } else {
+                    TryOutcome::Moved {
+                        count,
+                        target: render_target(&rule, &self.workspaces),
+                    }
                 }
             }
-        } else {
-            TryOutcome::NoSender
+            None => TryOutcome::NoSender,
         };
 
         // Bump the token so a still-pending clear-timer from a previous
