@@ -930,6 +930,7 @@ name = "cosmic-applet-gmail"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "cosmic-config",
  "cosmic-config-derive",
  "cosmic-google-common",
@@ -989,6 +990,9 @@ name = "cosmic-applet-slack"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "cosmic-config",
+ "cosmic-config-derive",
  "futures-util",
  "libc",
  "libcosmic",

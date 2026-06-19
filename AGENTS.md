@@ -120,8 +120,10 @@ Every applet does this:
 | Panel applet | `cosmic::applet::run::<AppModel>(())` | transparent sub-surface | default — no flag |
 | Settings window | `cosmic::app::run::<SettingsApp>(...)` | regular xdg_toplevel | `--show-settings` |
 
-(The Slack and QuotaBar applets have no settings — nothing to configure —
-so they only implement the panel mode and the `--debug` CLI mode below.)
+(The Slack and QuotaBar applets have no settings window. Slack still
+persists a single toggle (`disable_during_weekend`) via cosmic-config,
+flipped from the right-click menu; QuotaBar has nothing to configure.
+Both only implement the panel mode and the `--debug` CLI mode below.)
 
 The agenda binary adds two extra `argv`-selected modes (no iced involved):
 
@@ -181,8 +183,10 @@ same OAuth flow.
 
 The taxi applet uses cosmic-config for small scalars plus
 `~/.local/state/cosmic-applet-taxi/state.json` for the timers/sessions
-vector. The slack applet stores **nothing** — its only "state" is what
-Slack publishes on DBus at any given moment.
+vector. The slack applet stores a single `disable_during_weekend` bool
+in cosmic-config and nothing else — all of its visible state (unread
+count, indicator) is whatever Slack publishes on DBus at any given
+moment.
 
 Cross-binary propagation: the settings binary writes both. The applet's
 `watch_config::<Config>` subscription delivers `Message::UpdateConfig` when
@@ -624,8 +628,10 @@ and after every auto-export. Deleting a timer adds its alias to
 ### cosmic-applet-slack
 
 - **APP_ID**: `com.github.ragusa87.CosmicAppletSlack`
-- **No keyring entry, no config, no `cosmic-google-common`, no HTTP client.**
-  The only persistent state is whatever Slack itself publishes to DBus.
+- **No keyring entry, no `cosmic-google-common`, no HTTP client.**
+  The only cosmic-config field is a single `disable_during_weekend`
+  bool, flipped from the right-click menu; everything else (unread
+  count, indicator) is whatever Slack itself publishes to DBus.
 - **Discovery target**: a `:1.x` connection on the session bus whose
   `/proc/<pid>/comm` is `slack` *and* whose `/StatusNotifierItem` object
   serves a readable `ToolTip` property. Slack registers three sibling

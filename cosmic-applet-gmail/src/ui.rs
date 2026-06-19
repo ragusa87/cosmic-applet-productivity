@@ -1,7 +1,7 @@
 use cosmic::Element;
 use cosmic::applet::menu_button;
 use cosmic::iced::{Alignment, Length};
-use cosmic::widget::{Column, Row, button, text, text_input};
+use cosmic::widget::{Column, Row, button, settings, text, text_input, toggler};
 
 use crate::app::Message;
 
@@ -27,12 +27,16 @@ impl CredentialsForm {
     }
 }
 
-pub fn menu_view<'a>() -> Element<'a, Message> {
-    Column::new()
+pub fn menu_view<'a>(manual_paused: bool, effective_paused: bool) -> Element<'a, Message> {
+    let pause_label = if manual_paused { "Resume" } else { "Pause" };
+    let mut col = Column::new()
         .padding(4)
         .spacing(0)
-        .push(menu_button(text::body("Refresh")).on_press(Message::RefreshFromMenu))
-        .push(menu_button(text::body("Credentials\u{2026}")).on_press(Message::OpenCredentials))
+        .push(menu_button(text::body(pause_label)).on_press(Message::TogglePause));
+    if !effective_paused {
+        col = col.push(menu_button(text::body("Refresh")).on_press(Message::RefreshFromMenu));
+    }
+    col.push(menu_button(text::body("Credentials\u{2026}")).on_press(Message::OpenCredentials))
         .into()
 }
 
@@ -44,12 +48,14 @@ pub struct CredentialsHandlers<M: Clone> {
     pub on_email: fn(String) -> M,
     pub on_client_id: fn(String) -> M,
     pub on_client_secret: fn(String) -> M,
+    pub on_toggle_disable_during_weekend: fn(bool) -> M,
     pub authorize: M,
     pub cancel: M,
 }
 
 pub fn credentials_view<'a, M: Clone + 'static>(
     form: &'a CredentialsForm,
+    disable_during_weekend: bool,
     status: &'a Status,
     authorizing: bool,
     handlers: &CredentialsHandlers<M>,
@@ -98,6 +104,11 @@ pub fn credentials_view<'a, M: Clone + 'static>(
          Scope: gmail.metadata.",
     );
 
+    let behavior_section = settings::section().title("Behavior").add(settings::item(
+        "Disable during weekend",
+        toggler(disable_during_weekend).on_toggle(handlers.on_toggle_disable_during_weekend),
+    ));
+
     Column::new()
         .padding(12)
         .spacing(10)
@@ -108,5 +119,6 @@ pub fn credentials_view<'a, M: Clone + 'static>(
         .push(secret_field)
         .push(actions)
         .push(hint)
+        .push(behavior_section)
         .into()
 }

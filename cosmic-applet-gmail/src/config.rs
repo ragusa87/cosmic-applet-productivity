@@ -14,6 +14,7 @@ pub struct Config {
     pub email: String,
     pub client_id: String,
     pub poll_interval_secs: u32,
+    pub disable_during_weekend: bool,
 }
 
 impl Default for Config {
@@ -22,6 +23,7 @@ impl Default for Config {
             email: String::new(),
             client_id: String::new(),
             poll_interval_secs: 60,
+            disable_during_weekend: false,
         }
     }
 }

@@ -4,13 +4,14 @@ use cosmic::iced::widget::mouse_area;
 use cosmic::iced::{Limits, Subscription, window::Id};
 use cosmic::surface::{self, action::destroy_popup};
 use cosmic::widget::button;
+use cosmic_config::CosmicConfigEntry;
 use futures_util::{SinkExt, StreamExt};
 use tokio::signal::unix::{SignalKind, signal};
 
+use crate::config::{APP_ID, Config};
 use crate::slack::{self, SlackEvent, Unread};
 use crate::ui;
 
-const APP_ID: &str = "com.github.ragusa87.CosmicAppletSlack";
 const SLACK_ICON_SVG: &[u8] =
     include_bytes!("../data/icons/com.github.ragusa87.CosmicAppletSlack.svg");
 const SLACK_URI: &str = "slack:";
@@ -18,9 +19,17 @@ const SLACK_URI: &str = "slack:";
 #[derive(Default)]
 pub struct AppModel {
     pub core: cosmic::Core,
+    pub config: Config,
     pub unread: Unread,
     pub slack_running: bool,
     pub menu_popup: Option<Id>,
+    pub paused: bool,
+}
+
+impl AppModel {
+    pub fn is_paused(&self) -> bool {
+        self.paused || (self.config.disable_during_weekend && is_weekend_local())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +41,10 @@ pub enum Message {
     SlackEvent(SlackEvent),
     ForceRefresh,
     RefreshFromMenu,
+    TogglePause,
+    ToggleDisableDuringWeekend,
+
+    UpdateConfig(Config),
 
     NoOp,
 }
@@ -52,8 +65,16 @@ impl cosmic::Application for AppModel {
     }
 
     fn init(core: cosmic::Core, _flags: Self::Flags) -> (Self, Task<Self::Message>) {
+        let config = cosmic_config::Config::new(Self::APP_ID, Config::VERSION)
+            .map(|ctx| match Config::get_entry(&ctx) {
+                Ok(c) => c,
+                Err((_errors, c)) => c,
+            })
+            .unwrap_or_default();
+
         let app = AppModel {
             core,
+            config,
             ..Default::default()
         };
         (app, Task::none())
@@ -75,13 +96,14 @@ impl cosmic::Application for AppModel {
         let (icon_size, _) = self.core.applet.suggested_size(true);
         let (pad_major, pad_minor) = self.core.applet.suggested_padding(true);
         let icon_px = f32::from(icon_size);
+        let paused = self.is_paused();
 
-        let icon = cosmic::widget::icon(cosmic::widget::icon::from_svg_bytes(
-            SLACK_ICON_SVG.to_vec(),
-        ))
+        let icon = cosmic::widget::icon(
+            cosmic::widget::icon::from_svg_bytes(SLACK_ICON_SVG.to_vec()).symbolic(paused),
+        )
         .size(icon_size);
 
-        let badge_label = if self.slack_running {
+        let badge_label = if self.slack_running && !paused {
             match self.unread {
                 Unread::None => None,
                 Unread::Indicator => Some("\u{2022}".to_owned()),
@@ -167,8 +189,16 @@ impl cosmic::Application for AppModel {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
+        // Keep the subscription alive while paused: `SlackEvent` handlers
+        // early-return when `is_paused()`, and the inner rescan timer keeps
+        // ticking so weekend auto-pause re-evaluates the wall clock and
+        // resumes automatically on Monday without user interaction.
         let slack = Subscription::run(|| slack::stream().map(Message::SlackEvent));
-        Subscription::batch([slack, sigusr2_subscription()])
+        let watch = self
+            .core()
+            .watch_config::<Config>(Self::APP_ID)
+            .map(|update| Message::UpdateConfig(update.config));
+        Subscription::batch([slack, watch, sigusr2_subscription()])
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
@@ -204,6 +234,9 @@ impl cosmic::Application for AppModel {
             }
 
             Message::SlackEvent(SlackEvent::Unread(u)) => {
+                if self.is_paused() {
+                    return Task::none();
+                }
                 self.slack_running = true;
                 self.unread = u;
             }
@@ -225,6 +258,34 @@ impl cosmic::Application for AppModel {
                 let refresh = cosmic::task::message(cosmic::Action::App(Message::ForceRefresh));
                 return Task::batch([destroy_menu, refresh]);
             }
+
+            Message::TogglePause => {
+                self.paused = !self.paused;
+                let destroy_menu = self
+                    .menu_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                let resume = if self.is_paused() {
+                    Task::none()
+                } else {
+                    cosmic::task::message(cosmic::Action::App(Message::ForceRefresh))
+                };
+                return Task::batch([destroy_menu, resume]);
+            }
+
+            Message::ToggleDisableDuringWeekend => {
+                self.config.disable_during_weekend = !self.config.disable_during_weekend;
+                persist_config(&self.config);
+                let destroy_menu = self
+                    .menu_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                return destroy_menu;
+            }
+
+            Message::UpdateConfig(config) => {
+                self.config = config;
+            }
         }
         Task::none()
     }
@@ -236,6 +297,25 @@ impl cosmic::Application for AppModel {
 
 fn dispatch_surface(a: surface::Action) -> Task<Message> {
     cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(a)))
+}
+
+fn is_weekend_local() -> bool {
+    use chrono::Datelike;
+    matches!(
+        chrono::Local::now().weekday(),
+        chrono::Weekday::Sat | chrono::Weekday::Sun
+    )
+}
+
+fn persist_config(config: &Config) {
+    match cosmic_config::Config::new(APP_ID, Config::VERSION) {
+        Ok(ctx) => {
+            if let Err(why) = config.write_entry(&ctx) {
+                tracing::warn!(?why, "failed writing config entry");
+            }
+        }
+        Err(why) => tracing::warn!(?why, "failed opening cosmic-config"),
+    }
 }
 
 fn sigusr2_stream() -> impl cosmic::iced::futures::Stream<Item = Message> {
@@ -279,7 +359,11 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
             settings
         },
         Some(Box::new(|state: &AppModel| {
-            let body = ui::menu_view();
+            let body = ui::menu_view(
+                state.paused,
+                state.is_paused(),
+                state.config.disable_during_weekend,
+            );
             Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
         })),
     );

@@ -27,6 +27,13 @@ pub struct AppModel {
     pub unread: Option<u64>,
     pub stale: bool,
     pub tokens: Option<Tokens>,
+    pub paused: bool,
+}
+
+impl AppModel {
+    pub fn is_paused(&self) -> bool {
+        self.paused || (self.config.disable_during_weekend && is_weekend_local())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +47,7 @@ pub enum Message {
     Fetched(Result<(Tokens, u64), String>),
     ForceRefresh,
     RefreshFromMenu,
+    TogglePause,
 
     UpdateConfig(Config),
     TokensLoaded(Option<Tokens>),
@@ -105,16 +113,21 @@ impl cosmic::Application for AppModel {
         let (icon_size, _) = self.core.applet.suggested_size(true);
         let (pad_major, pad_minor) = self.core.applet.suggested_padding(true);
         let icon_px = f32::from(icon_size);
+        let paused = self.is_paused();
 
-        let icon = cosmic::widget::icon(cosmic::widget::icon::from_svg_bytes(
-            GMAIL_ICON_SVG.to_vec(),
-        ))
+        let icon = cosmic::widget::icon(
+            cosmic::widget::icon::from_svg_bytes(GMAIL_ICON_SVG.to_vec()).symbolic(paused),
+        )
         .size(icon_size);
 
-        let badge_label = match (self.unread, self.config.is_configured()) {
-            (None, false) => None,
-            (Some(n), _) => Some(n.to_string()),
-            (None, true) => Some("…".to_owned()),
+        let badge_label = if paused {
+            None
+        } else {
+            match (self.unread, self.config.is_configured()) {
+                (None, false) => None,
+                (Some(n), _) => Some(n.to_string()),
+                (None, true) => Some("…".to_owned()),
+            }
         };
 
         let badge_height = (icon_px * 0.7).round();
@@ -195,6 +208,10 @@ impl cosmic::Application for AppModel {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
+        // Keep the timer alive while paused: `Message::Tick` already
+        // early-returns when `is_paused()`, so no network happens, but the
+        // periodic re-evaluation lets weekend auto-pause unpause itself
+        // on Monday without user interaction.
         let poll = cosmic::iced::time::every(self.config.poll_interval()).map(|_| Message::Tick);
         let watch = self
             .core()
@@ -265,6 +282,9 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Tick => {
+                if self.is_paused() {
+                    return Task::none();
+                }
                 let Some(tokens) = self.tokens.clone() else {
                     return Task::none();
                 };
@@ -311,6 +331,20 @@ impl cosmic::Application for AppModel {
                     .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
                 let refresh = cosmic::task::message(cosmic::Action::App(Message::ForceRefresh));
                 return Task::batch([destroy_menu, refresh]);
+            }
+
+            Message::TogglePause => {
+                self.paused = !self.paused;
+                let destroy_menu = self
+                    .menu_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                let resume_tick = if self.is_paused() {
+                    Task::none()
+                } else {
+                    cosmic::task::message(cosmic::Action::App(Message::Tick))
+                };
+                return Task::batch([destroy_menu, resume_tick]);
             }
 
             Message::UpdateConfig(config) => {
@@ -387,11 +421,19 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
             settings
         },
         Some(Box::new(|state: &AppModel| {
-            let body = ui::menu_view();
+            let body = ui::menu_view(state.paused, state.is_paused());
             Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
         })),
     );
     dispatch_surface(action)
+}
+
+fn is_weekend_local() -> bool {
+    use chrono::Datelike;
+    matches!(
+        chrono::Local::now().weekday(),
+        chrono::Weekday::Sat | chrono::Weekday::Sun
+    )
 }
 
 async fn refresh_and_fetch(

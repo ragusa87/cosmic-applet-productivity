@@ -39,6 +39,7 @@ pub enum Msg {
     FormEmail(String),
     FormClientId(String),
     FormClientSecret(String),
+    ToggleDisableDuringWeekend(bool),
     Authorize,
     AuthorizeDone(Result<(String, String, Tokens), String>),
     Cancel,
@@ -101,10 +102,17 @@ impl cosmic::Application for SettingsApp {
             on_email: Msg::FormEmail,
             on_client_id: Msg::FormClientId,
             on_client_secret: Msg::FormClientSecret,
+            on_toggle_disable_during_weekend: Msg::ToggleDisableDuringWeekend,
             authorize: Msg::Authorize,
             cancel: Msg::Cancel,
         };
-        ui::credentials_view(&self.form, &self.status, self.authorizing, &handlers)
+        ui::credentials_view(
+            &self.form,
+            self.config.disable_during_weekend,
+            &self.status,
+            self.authorizing,
+            &handlers,
+        )
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
@@ -112,6 +120,11 @@ impl cosmic::Application for SettingsApp {
             Msg::FormEmail(s) => self.form.email = s,
             Msg::FormClientId(s) => self.form.client_id = s,
             Msg::FormClientSecret(s) => self.form.client_secret = s,
+
+            Msg::ToggleDisableDuringWeekend(on) => {
+                self.config.disable_during_weekend = on;
+                persist_config(&self.config);
+            }
 
             Msg::LoadTokens(Some(tokens)) => {
                 if self.form.client_secret.is_empty() {
@@ -178,5 +191,16 @@ impl cosmic::Application for SettingsApp {
             }
         }
         Task::none()
+    }
+}
+
+fn persist_config(config: &Config) {
+    match cosmic_config::Config::new(APP_ID, Config::VERSION) {
+        Ok(ctx) => {
+            if let Err(why) = config.write_entry(&ctx) {
+                tracing::warn!(?why, "failed writing config entry");
+            }
+        }
+        Err(why) => tracing::warn!(?why, "failed opening cosmic-config"),
     }
 }

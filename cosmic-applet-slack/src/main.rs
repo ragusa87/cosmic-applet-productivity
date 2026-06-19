@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod debug;
 mod slack;
 mod ui;

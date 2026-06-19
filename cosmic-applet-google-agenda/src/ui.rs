@@ -28,12 +28,16 @@ impl CredentialsForm {
     }
 }
 
-pub fn menu_view<'a>() -> Element<'a, Message> {
-    Column::new()
+pub fn menu_view<'a>(manual_paused: bool, effective_paused: bool) -> Element<'a, Message> {
+    let pause_label = if manual_paused { "Resume" } else { "Pause" };
+    let mut col = Column::new()
         .padding(4)
         .spacing(0)
-        .push(menu_button(text::body("Refresh")).on_press(Message::RefreshFromMenu))
-        .push(menu_button(text::body("Settings\u{2026}")).on_press(Message::OpenCredentials))
+        .push(menu_button(text::body(pause_label)).on_press(Message::TogglePause));
+    if !effective_paused {
+        col = col.push(menu_button(text::body("Refresh")).on_press(Message::RefreshFromMenu));
+    }
+    col.push(menu_button(text::body("Settings\u{2026}")).on_press(Message::OpenCredentials))
         .into()
 }
 
@@ -103,6 +107,7 @@ pub struct SettingsHandlers<M: Clone> {
     pub on_toggle_show_time: fn(bool) -> M,
     pub on_toggle_show_progress: fn(bool) -> M,
     pub on_toggle_notify: fn(bool) -> M,
+    pub on_toggle_disable_during_weekend: fn(bool) -> M,
     pub authorize: M,
     pub cancel: M,
 }
@@ -114,6 +119,7 @@ pub fn settings_view<'a, M: Clone + 'static>(
     show_time: bool,
     show_progress: bool,
     notify: bool,
+    disable_during_weekend: bool,
     status: &'a Status,
     authorizing: bool,
     handlers: &SettingsHandlers<M>,
@@ -184,6 +190,11 @@ pub fn settings_view<'a, M: Clone + 'static>(
             toggler(notify).on_toggle(handlers.on_toggle_notify),
         ));
 
+    let behavior_section = settings::section().title("Behavior").add(settings::item(
+        "Disable during weekend",
+        toggler(disable_during_weekend).on_toggle(handlers.on_toggle_disable_during_weekend),
+    ));
+
     let content = Column::new()
         .padding(12)
         .spacing(10)
@@ -196,7 +207,8 @@ pub fn settings_view<'a, M: Clone + 'static>(
         .push(actions)
         .push(hint)
         .push(display_section)
-        .push(notifications_section);
+        .push(notifications_section)
+        .push(behavior_section);
 
     scrollable(content)
         .width(Length::Fill)
