@@ -20,6 +20,8 @@ pub enum SkipReason {
     AllDay,
     Free,
     Declined,
+    OutOfOffice,
+    WorkingLocation,
 }
 
 impl std::fmt::Display for SkipReason {
@@ -29,6 +31,8 @@ impl std::fmt::Display for SkipReason {
             Self::AllDay => f.write_str("all-day (no precise start time)"),
             Self::Free => f.write_str("transparency=transparent (Free-marked)"),
             Self::Declined => f.write_str("self responseStatus=declined"),
+            Self::OutOfOffice => f.write_str("eventType=outOfOffice"),
+            Self::WorkingLocation => f.write_str("eventType=workingLocation"),
         }
     }
 }
@@ -42,6 +46,7 @@ pub struct DebugItem {
     pub end_display: String,
     pub status: Option<String>,
     pub transparency: Option<String>,
+    pub event_type: Option<String>,
     pub self_response: Option<String>,
     pub attendee_count: usize,
     pub meet_url: Option<String>,
@@ -102,6 +107,11 @@ fn classify(raw: &RawEvent) -> Result<DateTime<Utc>, SkipReason> {
     if raw.status.as_deref() == Some("cancelled") {
         return Err(SkipReason::Cancelled);
     }
+    match raw.event_type.as_deref() {
+        Some("outOfOffice") => return Err(SkipReason::OutOfOffice),
+        Some("workingLocation") => return Err(SkipReason::WorkingLocation),
+        _ => {}
+    }
     if raw.transparency.as_deref() == Some("transparent") {
         return Err(SkipReason::Free);
     }
@@ -158,6 +168,7 @@ fn to_debug_item(raw: RawEvent) -> DebugItem {
         .map_or_else(|| "(no end)".to_owned(), format_event_time);
     let status = raw.status.clone();
     let transparency = raw.transparency.clone();
+    let event_type = raw.event_type.clone();
     let meet_url = extract_meet_url(&raw);
     let location = raw
         .location
@@ -173,6 +184,7 @@ fn to_debug_item(raw: RawEvent) -> DebugItem {
         end_display,
         status,
         transparency,
+        event_type,
         self_response,
         attendee_count,
         meet_url,
@@ -222,6 +234,8 @@ struct RawEvent {
     status: Option<String>,
     #[serde(default)]
     transparency: Option<String>,
+    #[serde(default, rename = "eventType")]
+    event_type: Option<String>,
     start: RawEventTime,
     #[serde(default)]
     end: Option<RawEventTime>,
@@ -329,6 +343,41 @@ mod tests {
         let events = parse(json);
         let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["ok1", "ok2"]);
+    }
+
+    #[test]
+    fn filters_out_of_office_and_working_location() {
+        let json = r#"{
+            "items": [
+                {
+                    "id": "ooo",
+                    "summary": "Vacation",
+                    "status": "confirmed",
+                    "eventType": "outOfOffice",
+                    "start": { "dateTime": "2026-05-12T09:00:00Z" },
+                    "end":   { "dateTime": "2026-05-12T17:00:00Z" }
+                },
+                {
+                    "id": "wfh",
+                    "summary": "Home",
+                    "status": "confirmed",
+                    "eventType": "workingLocation",
+                    "start": { "dateTime": "2026-05-12T08:00:00Z" },
+                    "end":   { "dateTime": "2026-05-12T18:00:00Z" }
+                },
+                {
+                    "id": "meeting",
+                    "summary": "Standup",
+                    "status": "confirmed",
+                    "eventType": "default",
+                    "start": { "dateTime": "2026-05-12T09:30:00Z" },
+                    "end":   { "dateTime": "2026-05-12T09:45:00Z" }
+                }
+            ]
+        }"#;
+        let events = parse(json);
+        let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["meeting"]);
     }
 
     #[test]

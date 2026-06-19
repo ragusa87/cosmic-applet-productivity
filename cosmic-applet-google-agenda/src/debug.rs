@@ -173,6 +173,9 @@ fn print_item(index: usize, item: &DebugItem) {
     if let Some(t) = &item.transparency {
         println!("    transparency: {t}");
     }
+    if let Some(t) = &item.event_type {
+        println!("    eventType:    {t}");
+    }
     if item.attendee_count > 0 {
         let self_part = item
             .self_response
