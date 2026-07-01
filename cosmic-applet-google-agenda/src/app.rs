@@ -466,11 +466,11 @@ fn open_info_popup(new_id: Id) -> Task<Message> {
                 .max_width(360.0)
                 .min_width(240.0)
                 .min_height(80.0)
-                .max_height(320.0);
+                .max_height(480.0);
             settings
         },
         Some(Box::new(|state: &AppModel| {
-            let body = ui::event_info_view(state.next.as_ref(), CALENDAR_URL);
+            let body = ui::event_info_view(&state.events, CALENDAR_URL);
             Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
         })),
     );
@@ -558,16 +558,7 @@ fn maybe_notify(
     let Some(notice) = decide_notify(next, notified, lead_secs, now) else {
         return;
     };
-    tokio::task::spawn_blocking(move || {
-        let mut notif = notify_rust::Notification::new();
-        notif
-            .summary(&notice.summary)
-            .body(&notice.body)
-            .icon("com.github.ragusa87.CosmicAppletGoogleAgenda");
-        if let Err(e) = notif.show() {
-            tracing::warn!(error = %e, "failed to show meeting notification");
-        }
-    });
+    cosmic_google_common::notify::show(&notice.summary, &notice.body, APP_ID);
 }
 
 struct WedgeBadge {
