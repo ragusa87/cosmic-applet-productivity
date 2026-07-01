@@ -18,6 +18,8 @@ configparser = { workspace = true }
 dirs = { workspace = true }
 futures-util = { workspace = true }
 libc = { workspace = true }
+logind-zbus = { workspace = true }
+notify-rust = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

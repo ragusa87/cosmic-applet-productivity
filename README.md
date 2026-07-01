@@ -278,8 +278,19 @@ the end of the day" workflow.
   was running first. No overlapping ranges to clean up.
 - While running, the panel button shows
   `[⏱ _hello: TICKET-1 Setup 01:23 · 04:32]`.
-- **fixme: Auto-pause on screen lock / suspend** via DBus
-  (`org.freedesktop.ScreenSaver`, `org.freedesktop.login1`).
+- **Auto-pause on screen lock / suspend.** Locking the screen (or
+  suspending) freezes the running timer at that instant. On unlock it
+  does **not** auto-resume — it fires a desktop notification naming the
+  paused timer so you resume manually; a manually-paused timer is never
+  touched. Lock is detected over logind D-Bus (`org.freedesktop.login1`
+  `Session.Lock` + `PrepareForSleep`); unlock is detected by watching the
+  journal for cosmic-greeter's unlock marker (logind never emits
+  `Session.Unlock` on COSMIC). Run `cosmic-applet-taxi --debug --lock` to
+  watch these edges live.
+- **AFK logging.** Each away period (lock→unlock) is recorded as a session
+  on a reserved **`AFK`** timer, so your day's away-time is visible. It's a
+  local record: on export the AFK lines are written to the `.tks`
+  **commented out** (`# AFK …`), so `taxi` never bills them.
 - **Daily auto-export (Untested)** at a configurable cut-over hour (default `04:00`):
   for each closed session whose work-date is in the past, merge gaps
   under 5 min, round each merged span to ≥ 15 min, append the lines to
@@ -307,7 +318,7 @@ template (`[taxi].file`, default `~/zebra/%Y/%m.tks`), date format
 `[<backend>_aliases]`).
 
 **Configuration** — non-secret settings live in
-`~/.config/com.github.ragusa87.CosmicAppletTaxi/v1/`:
+`~/.config/com.github.ragusa87.CosmicAppletTaxi/v2/`:
 
 | Key                   | Default                                     | Notes                                          |
 |-----------------------|---------------------------------------------|------------------------------------------------|
@@ -316,6 +327,11 @@ template (`[taxi].file`, default `~/zebra/%Y/%m.tks`), date format
 | `round_min_minutes`   | `15`                                        | Each merged span rounded up to at least this.  |
 | `taxi_command`        | `uv run --with taxi,taxi-zebra taxi`        | Whitespace-split, args appended.               |
 | `taxirc_path`         | `""`                                        | Blank → resolve `~/.config/taxi/taxirc`.       |
+| `enable_autopause`    | `true`                                      | Master switch for pause-on-lock. Off → no pause/AFK; per-timer toggle hidden. |
+
+Each timer also has a per-timer **Auto-pause on lock screen** toggle (in
+its edit form, default on) so individual activities can keep counting
+through a lock.
 
 State (timer list + sessions) lives in
 `~/.local/state/cosmic-applet-taxi/state.json`. Aliases cached by

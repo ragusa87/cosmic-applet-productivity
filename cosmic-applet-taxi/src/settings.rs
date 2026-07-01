@@ -37,6 +37,7 @@ struct Form {
     round_min: String,
     taxi_command: String,
     taxirc_path: String,
+    enable_autopause: bool,
 }
 
 impl Form {
@@ -47,6 +48,7 @@ impl Form {
             round_min: c.round_min_minutes.to_string(),
             taxi_command: c.taxi_command.clone(),
             taxirc_path: c.taxirc_path.clone(),
+            enable_autopause: c.enable_autopause,
         }
     }
 }
@@ -58,6 +60,7 @@ pub enum Msg {
     FormRoundMin(String),
     FormTaxiCommand(String),
     FormTaxircPath(String),
+    FormEnableAutopause(bool),
     Save,
     Saved,
     RefreshAliases,
@@ -138,6 +141,24 @@ impl cosmic::Application for SettingsApp {
             .label("taxirc path")
             .on_input(Msg::FormTaxircPath);
 
+        let autopause = Column::new()
+            .spacing(2)
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(cosmic::iced::Alignment::Center)
+                    .push(
+                        cosmic::widget::toggler(self.form.enable_autopause)
+                            .on_toggle(Msg::FormEnableAutopause),
+                    )
+                    .push(text::body("Enable auto-pause on screen lock / suspend")),
+            )
+            .push(text::caption(
+                "When on, a running timer pauses while the screen is locked and \
+                 the away time is logged as AFK. Each timer can opt out \
+                 individually in its edit form.",
+            ));
+
         let mut diag = Column::new().spacing(2);
         match self.taxi.as_ref() {
             Some(r) if r.available => {
@@ -185,6 +206,7 @@ impl cosmic::Application for SettingsApp {
             .push(round)
             .push(cmd)
             .push(taxirc)
+            .push(autopause)
             .push(actions)
             .push(diag);
 
@@ -201,6 +223,7 @@ impl cosmic::Application for SettingsApp {
             Msg::FormRoundMin(s) => self.form.round_min = s,
             Msg::FormTaxiCommand(s) => self.form.taxi_command = s,
             Msg::FormTaxircPath(s) => self.form.taxirc_path = s,
+            Msg::FormEnableAutopause(v) => self.form.enable_autopause = v,
 
             Msg::Save => {
                 if let Err(e) = self.save() {
@@ -286,6 +309,7 @@ impl SettingsApp {
             round_min_minutes: round,
             taxi_command: cmd,
             taxirc_path: self.form.taxirc_path.trim().to_owned(),
+            enable_autopause: self.form.enable_autopause,
         };
         let ctx = cosmic_config::Config::new(APP_ID, Config::VERSION)
             .map_err(|e| anyhow::anyhow!("cosmic-config: {e}"))?;

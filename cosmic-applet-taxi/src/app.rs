@@ -37,6 +37,8 @@ pub struct EditBuf {
     /// First click on "Delete timer" arms this; second click commits the
     /// deletion. Any other interaction disarms.
     pub pending_delete_timer: bool,
+    /// Per-timer "pause on screen lock" toggle (mirrors `Timer::auto_pause`).
+    pub auto_pause: bool,
 }
 
 /// Per-session row in the edit form. `description` is held as a
@@ -156,6 +158,7 @@ pub enum Message {
     StartEdit(Uuid),
     EditAlias(String),
     EditAliasPick(String),
+    EditAutoPause(bool),
     EditDeleteTimer,
     EditSessionDesc(usize, cosmic::widget::text_editor::Action),
     EditSessionStart(usize, String),
@@ -342,11 +345,37 @@ impl cosmic::Application for AppModel {
             }
 
             Message::LockEvt(LockEventDup::Locked) => {
-                self.state.auto_pause_all(Local::now());
+                // Master switch off → ignore lock entirely.
+                if !self.config.enable_autopause {
+                    return Task::none();
+                }
+                // Consult the active timer: if it opted out of auto-pause, let
+                // it keep counting through the lock — no pause, no AFK, no
+                // notification (that time is intentionally worked).
+                if self.state.running_opts_out_of_autopause() {
+                    return Task::none();
+                }
+                let now = Local::now();
+                self.state.locked_at = Some(now);
+                self.state.auto_pause_all(now);
                 self.persist();
             }
             Message::LockEvt(LockEventDup::Unlocked) => {
-                self.state.auto_resume_one(Local::now());
+                // Log the away period as an AFK entry (every lock/unlock).
+                if let Some(from) = self.state.take_locked_at() {
+                    self.state.record_afk(from, Local::now());
+                }
+                // Deliberately do NOT auto-resume — notify instead so the user
+                // resumes manually (a forgotten timer shouldn't silently restart
+                // after an overnight lock).
+                let paused = self.state.take_lock_paused_labels();
+                if !paused.is_empty() {
+                    let body = format!(
+                        "Paused while the screen was locked: {}. Open the applet to resume.",
+                        paused.join(", ")
+                    );
+                    notify("Taxi timer paused", &body);
+                }
                 self.persist();
             }
 
@@ -487,6 +516,12 @@ impl cosmic::Application for AppModel {
                 } else {
                     self.edit_buf.pending_delete = Some(i);
                 }
+            }
+
+            Message::EditAutoPause(value) => {
+                self.edit_buf.auto_pause = value;
+                self.edit_buf.pending_delete = None;
+                self.edit_buf.pending_delete_timer = false;
             }
 
             Message::EditDeleteTimer => {
@@ -804,6 +839,7 @@ impl AppModel {
         };
         timer.alias = alias;
         timer.sessions = new_sessions;
+        timer.auto_pause = self.edit_buf.auto_pause;
         if !last_desc.is_empty() {
             timer.default_description = last_desc;
         }
@@ -872,6 +908,24 @@ fn run_auto_export(
             }
 
             let block_lines = build_block_lines(&quantized, agg.as_ref(), &timer.alias, grid);
+            // The AFK timer is a local record only — write it to the .tks
+            // commented out so `taxi` ignores it (its alias isn't a real
+            // Zebra alias). Lines already starting with `#` (e.g. the
+            // `# original …` provenance lines) are left as-is.
+            let block_lines: Vec<String> = if timer.alias == state::AFK_ALIAS {
+                block_lines
+                    .into_iter()
+                    .map(|l| {
+                        if l.starts_with('#') {
+                            l
+                        } else {
+                            format!("# {l}")
+                        }
+                    })
+                    .collect()
+            } else {
+                block_lines
+            };
             by_date.entry(date).or_default().extend(block_lines);
 
             for (idx, s) in timer.sessions.iter().enumerate() {
@@ -931,6 +985,7 @@ fn build_edit_buf(timer: Option<&Timer>) -> EditBuf {
     EditBuf {
         alias: t.alias.clone(),
         sessions,
+        auto_pause: t.auto_pause,
         error: None,
         pending_delete: None,
         alias_picked: false,
@@ -1019,6 +1074,21 @@ fn lock_stream() -> impl cosmic::iced::futures::Stream<Item = Message> {
 
 fn lock_subscription() -> Subscription<Message> {
     Subscription::run(lock_stream)
+}
+
+/// Best-effort desktop notification. Kept inline (rather than sharing
+/// `cosmic-google-common::notify`) to avoid pulling the whole GPL common crate
+/// in for one function — matches the quotabar applet's approach.
+fn notify(summary: &str, body: &str) {
+    let summary = summary.to_owned();
+    let body = body.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let mut n = notify_rust::Notification::new();
+        n.summary(&summary).body(&body).icon(APP_ID);
+        if let Err(e) = n.show() {
+            tracing::warn!(error = %e, "failed to show taxi notification");
+        }
+    });
 }
 
 fn spawn_subwindow(flag: &'static str) -> Task<Message> {
@@ -1113,6 +1183,48 @@ mod tests {
         // Session was dropped from state on successful write.
         let t = state.find_timer(id).unwrap();
         assert!(t.sessions.is_empty(), "exported session should be removed");
+    }
+
+    #[test]
+    fn auto_export_comments_out_afk_but_not_normal_timers() {
+        let tmp = tempdir();
+        let path = tmp.join("month.tks");
+        let rc = rc_at(&path);
+        let cfg = Config::default();
+        let today = NaiveDate::from_ymd_opt(2026, 5, 13).unwrap();
+
+        // A normal timer and an AFK timer, both with a yesterday session.
+        let (mut state, _id) = yesterday_state();
+        state.record_afk(
+            Local.with_ymd_and_hms(2026, 5, 12, 12, 0, 0).unwrap(),
+            Local.with_ymd_and_hms(2026, 5, 12, 12, 30, 0).unwrap(),
+        );
+
+        run_auto_export(&mut state, None, &rc, &cfg, today);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        // Normal timer line is a real (uncommented) entry.
+        assert!(content.contains("_x 09:00-10:00 y"));
+        // AFK is present but every AFK line is commented out.
+        assert!(
+            content.contains("AFK"),
+            "AFK should be recorded in the .tks"
+        );
+        for line in content.lines().filter(|l| l.contains("AFK")) {
+            assert!(
+                line.trim_start().starts_with('#'),
+                "AFK line must be commented out, got: {line:?}"
+            );
+        }
+        // `taxi` (and our own parser) ignore comments, so nothing bills AFK.
+        let parsed = crate::taxi::parse_tks(&content, &rc.date_format);
+        assert!(
+            parsed
+                .iter()
+                .flat_map(|d| &d.entries)
+                .all(|e| e.alias != state::AFK_ALIAS),
+            "AFK must not appear as a parsed (billable) entry"
+        );
     }
 
     #[test]
