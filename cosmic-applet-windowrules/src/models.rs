@@ -66,6 +66,15 @@ impl Rule {
         }
     }
 
+    /// A copy of this rule with a fresh `id`, so it's a distinct entry. Used by
+    /// the "Duplicate" action and by import (to avoid id collisions).
+    pub fn duplicated(&self) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            ..self.clone()
+        }
+    }
+
     /// Returns `true` when `other` covers exactly the same windows as `self`
     /// — same `app_id`, same `title_contains` (case-insensitive). Two such
     /// rules would compete for the same toplevel; `find_matching_rule` picks
@@ -80,6 +89,20 @@ impl Rule {
             (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
             _ => false,
         }
+    }
+
+    /// True when `other` is an exact behavioural duplicate: it matches the same
+    /// windows AND sends them to the same destination (workspace target +
+    /// output). Such a rule is pointless and is rejected by the editor.
+    ///
+    /// Two rules that match the same windows but target a *different*
+    /// workspace/output are allowed on purpose — ordered top-to-bottom they act
+    /// as a fallback list (e.g. "workspace 1 on the external monitor, else
+    /// workspace 1 on the laptop panel"). See `select_rule` in app.rs.
+    pub fn is_duplicate_of(&self, other: &Rule) -> bool {
+        self.matches_same_windows(other)
+            && self.target == other.target
+            && self.target_output == other.target_output
     }
 }
 
@@ -191,5 +214,27 @@ mod tests {
         let a = make_rule("Firefox", Some("PRIVATE"), true);
         let b = make_rule("Firefox", Some("private"), true);
         assert!(a.matches_same_windows(&b));
+    }
+
+    #[test]
+    fn duplicate_requires_same_target_and_output() {
+        let mut a = make_rule("Slack", None, true);
+        a.target = WorkspaceTarget::ByName("1".into());
+        a.target_output = Some("DP-4".into());
+
+        // Same window, same workspace, but a different monitor → NOT a duplicate
+        // (this is the fallback case we want to allow).
+        let mut b = a.clone();
+        b.target_output = Some("eDP-1".into());
+        assert!(!a.is_duplicate_of(&b));
+
+        // Identical window + workspace + output → duplicate.
+        let c = a.clone();
+        assert!(a.is_duplicate_of(&c));
+
+        // Same monitor but a different workspace → not a duplicate.
+        let mut d = a.clone();
+        d.target = WorkspaceTarget::ByName("2".into());
+        assert!(!a.is_duplicate_of(&d));
     }
 }

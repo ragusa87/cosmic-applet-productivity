@@ -5,7 +5,6 @@ use cosmic::iced::{Limits, Subscription, window::Id};
 use cosmic::surface::{self, action::destroy_popup};
 use cosmic::widget::{Column, button, text};
 
-use crate::apply;
 use crate::config::{APP_ID, Config};
 use crate::models::Rule;
 use crate::wayland::{
@@ -209,7 +208,7 @@ impl AppModel {
             "applet: new toplevel"
         );
 
-        let Some(rule) = self.find_matching_rule(snap) else {
+        let Some(rule) = self.select_rule(snap) else {
             return;
         };
         tracing::info!(
@@ -247,11 +246,24 @@ impl AppModel {
         }
     }
 
-    fn find_matching_rule(&self, snap: &ToplevelSnapshot) -> Option<&Rule> {
-        self.config
+    /// Pick the rule to apply to `snap`. Rules matching the same window form an
+    /// ordered fallback list: prefer the first (top-most) whose target monitor
+    /// is currently connected, so "workspace 1 on the external screen" wins when
+    /// it's plugged in and "workspace 1 on the laptop panel" takes over when it
+    /// isn't. If none of the targets' monitors are present, fall back to the
+    /// first match (best effort — the move may silently no-op, as before).
+    fn select_rule(&self, snap: &ToplevelSnapshot) -> Option<&Rule> {
+        let matches: Vec<&Rule> = self
+            .config
             .rules
             .iter()
-            .find(|r| r.matches(&snap.app_id, &snap.title))
+            .filter(|r| r.matches(&snap.app_id, &snap.title))
+            .collect();
+        matches
+            .iter()
+            .copied()
+            .find(|r| output_available(r, &self.workspaces))
+            .or_else(|| matches.first().copied())
     }
 
     fn toggle_menu_popup(&mut self) -> Task<Message> {
@@ -285,22 +297,44 @@ impl AppModel {
             return close;
         };
 
+        // Iterate windows (not rules): each window gets exactly one move — the
+        // best applicable rule per `select_rule` — so stacked fallback rules
+        // don't move the same window twice. `allow_switch` is effectively off
+        // here (we never activate) to avoid yanking the user across workspaces.
         let mut total = 0usize;
-        let mut rules_fired = 0usize;
-        for rule in self.config.rules.iter().filter(|r| r.enabled) {
-            let n = apply::apply_rule(rule, &self.toplevels, sender, false);
-            if n > 0 {
-                rules_fired += 1;
-                total += n;
-            }
+        for snap in &self.toplevels {
+            let Some(rule) = self.select_rule(snap) else {
+                continue;
+            };
+            let target = match &rule.target {
+                crate::models::WorkspaceTarget::ByName(n) => WorkspaceRef::Name(n.clone()),
+                crate::models::WorkspaceTarget::ByIndex(i) => WorkspaceRef::Index(*i),
+            };
+            sender.send(WlCommand::MoveToplevelToWorkspace {
+                toplevel: crate::wayland::ToplevelRef(snap.identifier.clone()),
+                workspace: target,
+                output: rule.target_output.clone(),
+            });
+            total += 1;
         }
         tracing::info!(
             total,
-            rules_fired,
             rules_total = self.config.rules.len(),
             "applet: apply all rules"
         );
         close
+    }
+}
+
+/// Whether `rule`'s target monitor is currently connected. A rule with no
+/// `target_output` is always "available"; one that names an output requires
+/// that output to currently expose at least one workspace.
+fn output_available(rule: &Rule, workspaces: &[WorkspaceSnapshot]) -> bool {
+    match &rule.target_output {
+        None => true,
+        Some(out) => workspaces
+            .iter()
+            .any(|w| w.output_name.as_deref() == Some(out.as_str())),
     }
 }
 
