@@ -1,7 +1,7 @@
 use cosmic::Element;
 use cosmic::applet::menu_button;
 use cosmic::iced::{Alignment, Length};
-use cosmic::widget::{Column, Row, button, text, text_input};
+use cosmic::widget::{Column, Row, button, scrollable, settings, text, text_input, toggler};
 
 use crate::app::Message;
 
@@ -27,12 +27,19 @@ impl CredentialsForm {
     }
 }
 
-pub fn menu_view<'a>() -> Element<'a, Message> {
-    Column::new()
+/// `manual_paused` drives the Pause/Resume label (what the menu toggle
+/// controls); `effective_paused` (manual OR weekend auto-pause) decides whether
+/// the Refresh item is shown, since refreshing does nothing while paused.
+pub fn menu_view<'a>(manual_paused: bool, effective_paused: bool) -> Element<'a, Message> {
+    let pause_label = if manual_paused { "Resume" } else { "Pause" };
+    let mut col = Column::new()
         .padding(4)
         .spacing(0)
-        .push(menu_button(text::body("Refresh")).on_press(Message::RefreshFromMenu))
-        .push(menu_button(text::body("Credentials\u{2026}")).on_press(Message::OpenCredentials))
+        .push(menu_button(text::body(pause_label)).on_press(Message::TogglePause));
+    if !effective_paused {
+        col = col.push(menu_button(text::body("Refresh")).on_press(Message::RefreshFromMenu));
+    }
+    col.push(menu_button(text::body("Settings\u{2026}")).on_press(Message::OpenCredentials))
         .into()
 }
 
@@ -44,17 +51,21 @@ pub struct CredentialsHandlers<M: Clone> {
     pub on_email: fn(String) -> M,
     pub on_client_id: fn(String) -> M,
     pub on_client_secret: fn(String) -> M,
+    pub on_toggle_notify: fn(bool) -> M,
+    pub on_toggle_auto_pause_weekend: fn(bool) -> M,
     pub authorize: M,
     pub cancel: M,
 }
 
 pub fn credentials_view<'a, M: Clone + 'static>(
     form: &'a CredentialsForm,
+    notify: bool,
+    auto_pause_weekend: bool,
     status: &'a Status,
     authorizing: bool,
     handlers: &CredentialsHandlers<M>,
 ) -> Element<'a, M> {
-    let header = text::title4("Gmail credentials");
+    let header = text::title4("Gmail settings");
 
     let email_field = text_input("user@gmail.com", &form.email)
         .label("Email")
@@ -98,15 +109,34 @@ pub fn credentials_view<'a, M: Clone + 'static>(
          Scope: gmail.metadata.",
     );
 
-    Column::new()
+    let notifications_section = settings::section()
+        .title("Notifications")
+        .add(settings::item(
+            "Notify on new mail",
+            toggler(notify).on_toggle(handlers.on_toggle_notify),
+        ));
+
+    let pause_section = settings::section().title("Pause").add(settings::item(
+        "Auto-pause on weekend",
+        toggler(auto_pause_weekend).on_toggle(handlers.on_toggle_auto_pause_weekend),
+    ));
+
+    let content = Column::new()
         .padding(12)
         .spacing(10)
         .width(Length::Fill)
         .push(header)
+        .push(text::body("Google credentials"))
         .push(email_field)
         .push(id_field)
         .push(secret_field)
         .push(actions)
         .push(hint)
+        .push(notifications_section)
+        .push(pause_section);
+
+    scrollable(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
         .into()
 }

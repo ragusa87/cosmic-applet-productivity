@@ -21,7 +21,7 @@ pub fn run() -> iced::Result {
         libc::signal(libc::SIGUSR2, libc::SIG_IGN);
     }
 
-    let settings = cosmic::app::Settings::default().size(Size::new(500.0, 360.0));
+    let settings = cosmic::app::Settings::default().size(Size::new(500.0, 520.0));
     cosmic::app::run::<SettingsApp>(settings, ())
 }
 
@@ -39,6 +39,8 @@ pub enum Msg {
     FormEmail(String),
     FormClientId(String),
     FormClientSecret(String),
+    ToggleNotify(bool),
+    ToggleAutoPauseWeekend(bool),
     Authorize,
     AuthorizeDone(Result<(String, String, Tokens), String>),
     Cancel,
@@ -101,10 +103,19 @@ impl cosmic::Application for SettingsApp {
             on_email: Msg::FormEmail,
             on_client_id: Msg::FormClientId,
             on_client_secret: Msg::FormClientSecret,
+            on_toggle_notify: Msg::ToggleNotify,
+            on_toggle_auto_pause_weekend: Msg::ToggleAutoPauseWeekend,
             authorize: Msg::Authorize,
             cancel: Msg::Cancel,
         };
-        ui::credentials_view(&self.form, &self.status, self.authorizing, &handlers)
+        ui::credentials_view(
+            &self.form,
+            self.config.notify,
+            self.config.auto_pause_weekend,
+            &self.status,
+            self.authorizing,
+            &handlers,
+        )
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
@@ -112,6 +123,26 @@ impl cosmic::Application for SettingsApp {
             Msg::FormEmail(s) => self.form.email = s,
             Msg::FormClientId(s) => self.form.client_id = s,
             Msg::FormClientSecret(s) => self.form.client_secret = s,
+
+            Msg::ToggleNotify(v) => {
+                // Persist immediately so the panel applet's config watcher picks
+                // it up without waiting for the credentials flow to complete.
+                self.config.notify = v;
+                if let Ok(ctx) = cosmic_config::Config::new(APP_ID, Config::VERSION)
+                    && let Err(why) = self.config.write_entry(&ctx)
+                {
+                    tracing::warn!(?why, "failed writing notify toggle");
+                }
+            }
+
+            Msg::ToggleAutoPauseWeekend(v) => {
+                self.config.auto_pause_weekend = v;
+                if let Ok(ctx) = cosmic_config::Config::new(APP_ID, Config::VERSION)
+                    && let Err(why) = self.config.write_entry(&ctx)
+                {
+                    tracing::warn!(?why, "failed writing auto-pause toggle");
+                }
+            }
 
             Msg::LoadTokens(Some(tokens)) => {
                 if self.form.client_secret.is_empty() {
