@@ -40,6 +40,7 @@ pub enum Message {
     Fetched(Result<(Tokens, u64), String>),
     ForceRefresh,
     RefreshFromMenu,
+    TogglePause,
 
     UpdateConfig(Config),
     TokensLoaded(Option<Tokens>),
@@ -106,15 +107,22 @@ impl cosmic::Application for AppModel {
         let (pad_major, pad_minor) = self.core.applet.suggested_padding(true);
         let icon_px = f32::from(icon_size);
 
-        let icon = cosmic::widget::icon(cosmic::widget::icon::from_svg_bytes(
-            GMAIL_ICON_SVG.to_vec(),
-        ))
+        let paused = self.config.is_paused();
+
+        // Grey the icon (render it symbolic/monochrome) while paused.
+        let icon = cosmic::widget::icon(
+            cosmic::widget::icon::from_svg_bytes(GMAIL_ICON_SVG.to_vec()).symbolic(paused),
+        )
         .size(icon_size);
 
-        let badge_label = match (self.unread, self.config.is_configured()) {
-            (None, false) => None,
-            (Some(n), _) => Some(n.to_string()),
-            (None, true) => Some("…".to_owned()),
+        let badge_label = if paused {
+            None
+        } else {
+            match (self.unread, self.config.is_configured()) {
+                (None, false) => None,
+                (Some(n), _) => Some(n.to_string()),
+                (None, true) => Some("…".to_owned()),
+            }
         };
 
         let badge_height = (icon_px * 0.7).round();
@@ -265,6 +273,10 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Tick => {
+                // Skip all polling (hence the count check) while paused.
+                if self.config.is_paused() {
+                    return Task::none();
+                }
                 let Some(tokens) = self.tokens.clone() else {
                     return Task::none();
                 };
@@ -282,6 +294,20 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Fetched(Ok((tokens, count))) => {
+                // Notify only when the count rises from a known baseline, so we
+                // stay silent on the first fetch after startup and never fire
+                // when mail is read elsewhere (count drops).
+                if self.config.notify
+                    && let Some(prev) = self.unread
+                    && count > prev
+                {
+                    let new = count - prev;
+                    cosmic_google_common::notify::show(
+                        &format!("{new} new message{}", if new == 1 { "" } else { "s" }),
+                        "Gmail",
+                        APP_ID,
+                    );
+                }
                 self.tokens = Some(tokens);
                 self.unread = Some(count);
                 self.stale = false;
@@ -311,6 +337,23 @@ impl cosmic::Application for AppModel {
                     .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
                 let refresh = cosmic::task::message(cosmic::Action::App(Message::ForceRefresh));
                 return Task::batch([destroy_menu, refresh]);
+            }
+
+            Message::TogglePause => {
+                let destroy_menu = self
+                    .menu_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                self.config.paused = !self.config.paused;
+                persist_config(&self.config);
+                // If we just resumed (and no weekend auto-pause applies), fetch
+                // right away rather than waiting for the next poll.
+                let resume = if self.config.is_paused() {
+                    Task::none()
+                } else {
+                    cosmic::task::message(cosmic::Action::App(Message::Tick))
+                };
+                return Task::batch([destroy_menu, resume]);
             }
 
             Message::UpdateConfig(config) => {
@@ -387,11 +430,19 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
             settings
         },
         Some(Box::new(|state: &AppModel| {
-            let body = ui::menu_view();
+            let body = ui::menu_view(state.config.paused, state.config.is_paused());
             Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
         })),
     );
     dispatch_surface(action)
+}
+
+fn persist_config(config: &Config) {
+    if let Ok(ctx) = cosmic_config::Config::new(APP_ID, Config::VERSION)
+        && let Err(why) = config.write_entry(&ctx)
+    {
+        tracing::warn!(?why, "failed writing config entry");
+    }
 }
 
 async fn refresh_and_fetch(
