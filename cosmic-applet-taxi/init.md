@@ -48,10 +48,13 @@ The crate lives next to two pre-existing Google-backed applets
   - something running → `[icon alias: description elapsed · total]`
   - description truncated past ~40 chars with `…`
   - vertical panel anchor degrades to just `[icon HH:MM]`
-- **Auto-pause on screen lock / suspend** via DBus
-  (`org.freedesktop.ScreenSaver.ActiveChanged` on the session bus +
-  `org.freedesktop.login1.Manager.PrepareForSleep` on the system bus).
-  Auto-resume on unlock. Coalesced inside `lock::stream`.
+- **Auto-pause on screen lock / suspend.** Lock is detected over logind
+  D-Bus (`org.freedesktop.login1` `Session.Lock` + `Manager.PrepareForSleep`,
+  session resolved by PID via `logind-zbus`). Unlock is detected by a
+  `journalctl` follower watching for cosmic-greeter's unlock marker —
+  logind never emits `Session.Unlock` on COSMIC. Coalesced inside
+  `lock::stream`. On unlock the applet notifies (naming the paused timer)
+  rather than auto-resuming.
 - **Daily auto-export** at a configurable cut-over hour (default
   `04:00`): closed sessions whose work-date is in the past get merged
   (5-min gap threshold), rounded (15-min minimum), and appended to the
@@ -177,9 +180,11 @@ cosmic-applet-taxi/
     │                         # [<backend>_aliases] section; .tks line-iterator
     │                         # parser + append_day writer; TaxiRunner (uv subprocess
     │                         # wrapper); parse_alias_list with description capture
-    └── lock.rs               # zbus 5 — session bus ScreenSaver.ActiveChanged
-                              # + system bus login1.Manager.PrepareForSleep,
-                              # coalesced into LockEvent::{Locked, Unlocked}
+    └── lock.rs               # logind-zbus — login1 Session.Lock +
+                              # Manager.PrepareForSleep for lock/suspend; a
+                              # journalctl follower for unlock (no login1
+                              # Unlock on COSMIC), coalesced into
+                              # LockEvent::{Locked, Unlocked}
 ```
 
 ## Pipelines
@@ -222,13 +227,43 @@ Deleting a timer in the popup adds its alias to
 
 ### Screen lock / suspend
 
-`lock::stream` connects to two DBus signals; failures are logged and
-ignored individually. On the merged stream:
+Lock and unlock come from different sources on COSMIC (logind emits
+`Session.Lock` but never `Session.Unlock`):
 
-- `Locked` → `state.auto_pause_all(now)` — close any open session,
-  set `auto_resume = true`.
-- `Unlocked` → `state.auto_resume_one(now)` — restart the one timer
-  flagged `auto_resume`, push a new session.
+- **Lock** — logind D-Bus via `logind-zbus`: `Session.Lock` (manual lock)
+  and `Manager.PrepareForSleep(start=true)` (suspend), the session
+  resolved by PID. Setup failures are logged; missing `PrepareForSleep`
+  is non-fatal (lock-only).
+- **Unlock** — a `journalctl --user -t cosmic-greeter -f` follower spawned
+  only while locked, matching the `unlocked login keyring` marker
+  (`UNLOCK_MARKER`); the child is killed on drop once matched.
+
+On the coalesced `LockEvent` stream (deduped so a suspend-lock plus its
+lock-screen don't double-fire):
+
+- `Locked` → `state.auto_pause_all(now)` — close any open session, set
+  `auto_resume = true` (the paused-by-lock marker). Manually-paused
+  timers aren't running, so they're left alone.
+Auto-pause is gated two ways: the global `config.enable_autopause` master
+switch (off → the `Locked` arm returns immediately), and a per-timer
+`Timer.auto_pause` (default `true`, edited in the timer's form, hidden
+when the global switch is off). On lock, if the *running* timer opted out
+(`state.running_opts_out_of_autopause()`), the lock is ignored entirely —
+it keeps counting, with no pause/AFK/notification.
+
+- `Unlocked` → records the away period via `state.record_afk(locked_at,
+  now)`, then `state.take_lock_paused_labels()` clears the marker and
+  returns the paused timers' labels; the app fires **one notification**
+  naming them. It does **not** auto-resume — the user resumes manually.
+
+`locked_at` (on `AppState`, persisted) is set on `Locked` and consumed on
+`Unlocked` so the away duration is known even when nothing was running.
+The AFK away-time lands on a reserved `AFK` timer (alias `AFK_ALIAS`);
+`run_auto_export` prefixes its lines with `# ` so they're a commented,
+never-billed record in the `.tks` (and `parse_tks` skips them, so
+`seed_timers_from_tks` never revives AFK).
+
+Validate the pipeline live with `cosmic-applet-taxi --debug --lock`.
 
 ### Alias autocomplete + sticky default
 

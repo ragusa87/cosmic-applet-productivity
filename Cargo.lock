@@ -1017,6 +1017,8 @@ dependencies = [
  "futures-util",
  "libc",
  "libcosmic",
+ "logind-zbus",
+ "notify-rust",
  "regex",
  "serde",
  "serde_json",
@@ -3254,6 +3256,16 @@ name = "log"
 version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
+
+[[package]]
+name = "logind-zbus"
+version = "5.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "469c962578b549a82f3d0cc72d0f77d1123780fa7121e2b03d78b0780f6ccac6"
+dependencies = [
+ "serde",
+ "zbus 5.16.0",
+]
 
 [[package]]
 name = "lru"

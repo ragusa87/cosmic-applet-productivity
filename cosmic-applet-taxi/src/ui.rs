@@ -245,8 +245,21 @@ fn edit_row<'a>(app: &'a AppModel, t: &'a Timer) -> Element<'a, Message> {
         .width(Length::Fill)
         .push(header)
         .push(suggest_dropdown)
-        .push(session_col)
-        .push(edit_footer);
+        .push(session_col);
+
+    // Per-timer auto-pause opt-out — only meaningful (and only shown) when the
+    // global master switch is on.
+    if app.config.enable_autopause {
+        col = col.push(
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(cosmic::widget::toggler(buf.auto_pause).on_toggle(Message::EditAutoPause))
+                .push(text::body("Auto-pause on lock screen")),
+        );
+    }
+
+    col = col.push(edit_footer);
 
     if let Some(err) = &buf.error {
         col = col.push(text::caption(err.clone()));

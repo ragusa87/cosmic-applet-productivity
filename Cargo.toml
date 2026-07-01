@@ -24,6 +24,7 @@ dirs = "5"
 futures-util = "0.3"
 keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 libc = "0.2"
+logind-zbus = { version = "5", default-features = false }
 notify-rust = "4"
 oauth2 = "5"
 regex = "1"

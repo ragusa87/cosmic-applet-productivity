@@ -36,8 +36,17 @@ pub struct Timer {
     pub selected: bool,
     #[serde(default)]
     pub auto_resume: bool,
+    /// Whether this timer pauses on screen lock / suspend. Defaults to `true`
+    /// (opt-out per timer). Old state files lacking the field default to `true`
+    /// via [`default_true`], preserving the original behaviour.
+    #[serde(default = "default_true")]
+    pub auto_pause: bool,
     #[serde(default)]
     pub sessions: Vec<Session>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Timer {
@@ -48,6 +57,7 @@ impl Timer {
             default_description: default_description.into(),
             selected: false,
             auto_resume: false,
+            auto_pause: true,
             sessions: Vec::new(),
         }
     }
@@ -65,6 +75,10 @@ impl Timer {
     }
 }
 
+/// Reserved alias for the auto-logged away-from-keyboard timer. Its sessions
+/// span lock→unlock and are exported *commented out* so `taxi` ignores them.
+pub const AFK_ALIAS: &str = "AFK";
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppState {
     #[serde(default)]
@@ -75,6 +89,11 @@ pub struct AppState {
     pub total_selected: bool,
     #[serde(default)]
     pub schema_version: u32,
+    /// Timestamp of the most recent screen-lock / suspend, so the away
+    /// duration can be recorded as an AFK session on unlock. `None` when not
+    /// locked. Persisted so it survives an applet restart mid-lock.
+    #[serde(default)]
+    pub locked_at: Option<DateTime<Local>>,
 }
 
 const SCHEMA_VERSION: u32 = 1;
@@ -131,6 +150,12 @@ impl AppState {
 
     pub fn running_timer(&self) -> Option<&Timer> {
         self.timers.iter().find(|t| t.is_running())
+    }
+
+    /// True when a timer is currently running *and* it opted out of auto-pause
+    /// — lock should then leave it counting (no pause, no AFK, no notify).
+    pub fn running_opts_out_of_autopause(&self) -> bool {
+        self.running_timer().is_some_and(|t| !t.auto_pause)
     }
 
     pub fn add_timer(&mut self, alias: String, default_description: String) -> Option<Uuid> {
@@ -206,12 +231,50 @@ impl AppState {
         }
     }
 
-    /// Resume the one timer marked `auto_resume` (we only ever set the flag on
-    /// the previously running timer, since the single-running invariant holds).
-    pub fn auto_resume_one(&mut self, now: DateTime<Local>) {
-        let target = self.timers.iter().find(|t| t.auto_resume).map(|t| t.id);
-        if let Some(id) = target {
-            self.start_timer(id, now);
+    /// Return display labels (`alias: description`, or just `alias` when the
+    /// session has no description) for every timer marked paused-by-lock, and
+    /// clear the marker. Consumed on unlock to notify the user — we deliberately
+    /// do NOT auto-resume; the user resumes manually.
+    pub fn take_lock_paused_labels(&mut self) -> Vec<String> {
+        let mut labels = Vec::new();
+        for t in &mut self.timers {
+            if t.auto_resume {
+                t.auto_resume = false;
+                let desc = t.sessions.last().map_or("", |s| s.description.as_str());
+                if desc.is_empty() {
+                    labels.push(t.alias.clone());
+                } else {
+                    labels.push(format!("{}: {desc}", t.alias));
+                }
+            }
+        }
+        labels
+    }
+
+    /// Take and clear the stored lock timestamp (set on lock, consumed on
+    /// unlock to compute the away duration).
+    pub fn take_locked_at(&mut self) -> Option<DateTime<Local>> {
+        self.locked_at.take()
+    }
+
+    /// Record an away period (`from`..`to`) as a closed session on the reserved
+    /// [`AFK_ALIAS`] timer, creating that timer if it doesn't exist yet. No-op
+    /// for a non-positive span.
+    pub fn record_afk(&mut self, from: DateTime<Local>, to: DateTime<Local>) {
+        if to <= from {
+            return;
+        }
+        let session = Session {
+            start: from,
+            end: Some(to),
+            description: String::new(),
+        };
+        if let Some(t) = self.timers.iter_mut().find(|t| t.alias == AFK_ALIAS) {
+            t.sessions.push(session);
+        } else {
+            let mut t = Timer::new(AFK_ALIAS, "");
+            t.sessions.push(session);
+            self.timers.push(t);
         }
     }
 
@@ -331,15 +394,108 @@ mod tests {
     }
 
     #[test]
-    fn auto_pause_then_resume_keeps_one_running() {
+    fn auto_pause_all_closes_session_and_marks() {
         let mut s = AppState::default();
         let a = s.add_timer("_a".into(), String::new()).unwrap();
         s.start_timer(a, at(9, 0));
         s.auto_pause_all(at(9, 30));
         assert!(!s.timers[0].is_running());
+        assert_eq!(s.timers[0].sessions[0].end.unwrap(), at(9, 30));
         assert!(s.timers[0].auto_resume);
-        s.auto_resume_one(at(10, 0));
-        assert!(s.timers[0].is_running());
+    }
+
+    #[test]
+    fn take_lock_paused_labels_returns_then_clears_without_resuming() {
+        let mut s = AppState::default();
+        let a = s.add_timer("_a".into(), "designing".into()).unwrap();
+        s.start_timer(a, at(9, 0));
+        s.auto_pause_all(at(9, 30));
+
+        let labels = s.take_lock_paused_labels();
+        assert_eq!(labels, vec!["_a: designing".to_string()]);
+        // Marker cleared, and the timer is NOT resumed (no new session).
         assert!(!s.timers[0].auto_resume);
+        assert!(!s.timers[0].is_running());
+        assert_eq!(s.timers[0].sessions.len(), 1);
+        // A second call finds nothing.
+        assert!(s.take_lock_paused_labels().is_empty());
+    }
+
+    #[test]
+    fn take_lock_paused_labels_omits_empty_description() {
+        let mut s = AppState::default();
+        let a = s.add_timer("_a".into(), String::new()).unwrap();
+        s.start_timer(a, at(9, 0));
+        s.auto_pause_all(at(9, 30));
+        assert_eq!(s.take_lock_paused_labels(), vec!["_a".to_string()]);
+    }
+
+    #[test]
+    fn record_afk_creates_timer_and_appends_sessions() {
+        let mut s = AppState::default();
+        s.record_afk(at(9, 0), at(9, 30));
+        let afk = s.find_by_alias(AFK_ALIAS).expect("AFK timer created");
+        assert_eq!(afk.sessions.len(), 1);
+        assert_eq!(afk.sessions[0].start, at(9, 0));
+        assert_eq!(afk.sessions[0].end.unwrap(), at(9, 30));
+        assert!(
+            !afk.selected,
+            "AFK stays out of the picked total by default"
+        );
+
+        // A second away period appends to the same timer.
+        s.record_afk(at(12, 0), at(12, 45));
+        assert_eq!(s.find_by_alias(AFK_ALIAS).unwrap().sessions.len(), 2);
+    }
+
+    #[test]
+    fn record_afk_ignores_non_positive_span() {
+        let mut s = AppState::default();
+        s.record_afk(at(9, 30), at(9, 30)); // zero
+        s.record_afk(at(10, 0), at(9, 0)); // negative
+        assert!(s.find_by_alias(AFK_ALIAS).is_none());
+    }
+
+    #[test]
+    fn take_locked_at_returns_then_clears() {
+        let mut s = AppState::default();
+        assert!(s.take_locked_at().is_none());
+        s.locked_at = Some(at(9, 0));
+        assert_eq!(s.take_locked_at(), Some(at(9, 0)));
+        assert!(s.take_locked_at().is_none());
+    }
+
+    #[test]
+    fn running_opts_out_of_autopause_reflects_active_timer_flag() {
+        let mut s = AppState::default();
+        let a = s.add_timer("_a".into(), String::new()).unwrap();
+        s.start_timer(a, at(9, 0));
+        // New timers default to auto_pause = true → opted in.
+        assert!(!s.running_opts_out_of_autopause());
+        s.find_timer_mut(a).unwrap().auto_pause = false;
+        assert!(s.running_opts_out_of_autopause());
+        // Nothing running → not an opt-out (AFK still applies when locked).
+        s.pause_timer(a, at(9, 30));
+        assert!(!s.running_opts_out_of_autopause());
+    }
+
+    #[test]
+    fn timer_without_auto_pause_field_defaults_true() {
+        // Old state.json predating the field must deserialise to auto_pause=true.
+        let json = r#"{"id":"00000000-0000-0000-0000-000000000001","alias":"_a"}"#;
+        let t: Timer = serde_json::from_str(json).unwrap();
+        assert!(t.auto_pause);
+    }
+
+    #[test]
+    fn auto_pause_all_leaves_manually_paused_timer_untouched() {
+        let mut s = AppState::default();
+        let a = s.add_timer("_a".into(), String::new()).unwrap();
+        s.start_timer(a, at(9, 0));
+        s.pause_timer(a, at(9, 15)); // explicit manual pause
+        s.auto_pause_all(at(9, 30));
+        // Not marked for resume, so unlock will neither notify nor resume it.
+        assert!(!s.timers[0].auto_resume);
+        assert!(s.take_lock_paused_labels().is_empty());
     }
 }
