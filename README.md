@@ -173,8 +173,24 @@ endpoint on `INBOX` (the `messagesUnread` field) once per poll interval.
 | `email`              | `""`    | Filled when you click **Authorize**. |
 | `client_id`          | `""`    | Same — written from the settings form. |
 | `poll_interval_secs` | `60`    | Clamped to a minimum of 15s.         |
+| `notify`             | `true`  | Desktop notification when the unread count rises. Toggle in settings. |
+| `paused`             | `false` | Manual pause (toggled from the right-click menu). |
+| `auto_pause_weekend` | `false` | Auto-pause on Saturday/Sunday. Toggle in settings. |
 
 You can edit `poll_interval_secs` by hand; the applet picks up changes live.
+
+**New-mail notification** — when `notify` is on, the applet fires a desktop
+notification each time the unread count *increases* (e.g. "2 new messages"). It
+stays silent on the first poll after startup and never fires when the count
+drops (mail read elsewhere). Toggle it under **Notifications** in the settings
+window.
+
+**Pause** — right-click → **Pause** (toggles to **Resume**) stops polling
+entirely: no count check, no notifications, and the panel icon greys out
+(rendered monochrome) with its badge hidden. Enable **Auto-pause on weekend** in
+settings to pause automatically on Saturday/Sunday; it resumes on its own come
+Monday. Manual pause and weekend auto-pause are independent — the effective
+state is "paused if either applies".
 
 Secrets are stored under Secret Service entry
 `com.github.ragusa87.CosmicAppletGmail:tokens / {email}` as a JSON blob
@@ -192,6 +208,10 @@ Shows the next event on your primary Google Calendar with a live countdown,
 and fires a desktop notification a few minutes before it starts. The
 countdown (`12m`, `1h`, `now`) updates **every 30s locally** from a cached
 event list — the Calendar API is only hit every 5 minutes.
+
+**Left-click popup** — shows the current/next event in detail (title, time,
+location, and an **Open in Google Meet / Open calendar** button), followed by a
+compact **Later** list of the next few upcoming meetings.
 
 **What gets filtered out** — the applet ignores:
 
@@ -223,7 +243,7 @@ required.
 | `client_id`               | `""`    | Same — written from the settings form.             |
 | `fetch_interval_secs`     | `300`   | Calendar API poll cadence. Clamped to min 60s.     |
 | `display_tick_secs`       | `30`    | Local countdown refresh. Clamped to min 5s.        |
-| `notification_lead_secs`  | `300`   | Notify this many seconds before start. `0` disables. |
+| `notification_lead_secs`  | `300`   | Notify this many seconds before start. `0` disables. Also settable via a preset dropdown (1/5/10/15/30 min) under **Notifications** in settings. |
 | `show_title`              | `true`  | Show event title next to the countdown.            |
 
 You can edit these by hand; the applet picks up changes live.
@@ -395,7 +415,7 @@ The rest of the workspace stays GPL-3.0-or-later.
 across both providers (e.g. `8%`). Left-click opens a popup with a
 horizontal bar per provider × window (Daily = 5h, Weekly = 7d),
 color-graded from green (low) through orange to red (≥ 90%). Right-click
-gives a one-item **Refresh** menu.
+gives a **Refresh** / **Settings…** menu.
 
 **How auth works** — there is no OAuth flow inside the applet:
 
@@ -421,9 +441,29 @@ the popup.
 demand via the popup's Refresh button, the right-click menu, or
 `pkill -USR2 -f cosmic-applet-quotabar`.
 
-**Configuration** — none. Both endpoints, the OAuth client IDs, and
-the credential file paths are hardcoded to match what Claude Code and
-Codex use today.
+**Threshold alert** — when usage crosses a configurable percentage, the applet
+fires a desktop notification (e.g. "Anthropic Weekly usage at 92%") so you don't
+have to open the popup to notice. It fires on the **rising edge** — the poll
+where a window goes from below the threshold to at/above it (and on the first
+poll after startup if a window is already over) — so staying over the line
+across many 5-minute polls won't re-nag. It re-arms when usage drops back below
+the threshold (e.g. after the window resets).
+
+**Configuration** — the endpoints, OAuth client IDs, and credential file paths
+are hardcoded. Right-click → **Settings…** opens a standalone window (spawned via
+`--show-settings`) with an "Notify me on quota threshold" toggle and a threshold
+dropdown. The two non-secret settings live in
+`~/.config/com.github.ragusa87.CosmicAppletQuotaBar/v1/` (also editable by hand;
+changes apply live via the config watcher):
+
+| Key                   | Default | Notes                                             |
+|-----------------------|---------|---------------------------------------------------|
+| `alert_enabled`       | `true`  | Fire the threshold notification.                  |
+| `alert_threshold_pct` | `90`    | Percent (0–100) at or above which the alert fires.|
+
+```sh
+cosmic-applet-quotabar --show-settings
+```
 
 **Debugging what the panel sees** — print one snapshot per provider
 and exit:
@@ -477,15 +517,29 @@ It lets you:
   remembers which one you picked.
 - Toggle **"Switch to the chosen workspace"** if you want the rule to
   also focus the destination after moving the window. Off by default.
-- Each saved rule has **Edit / Disable / Delete** buttons, plus a
-  **try now** link that scans the currently-open toplevels and applies
-  the rule to any matching window on demand (so existing windows don't
-  have to be reopened to pick up a freshly-added rule). The result —
-  "Moved N window(s) to workspace …" or "No matching windows." — shows
-  under the row for a few seconds and then fades. The
-  rule-uniqueness check rejects two rules with the same
-  `(app_id, title_filter)` tuple — handy for catching "I created two
-  Spotify rules going to different workspaces" mistakes.
+- Each saved rule has **↑ / ↓ / Edit / Duplicate / Disable / Delete**
+  buttons, plus a **try now** link that scans the currently-open
+  toplevels and applies the rule to any matching window on demand (so
+  existing windows don't have to be reopened to pick up a freshly-added
+  rule). The result — "Moved N window(s) to workspace …" or "No matching
+  windows." — shows under the row for a few seconds and then fades. The
+  rule-uniqueness check rejects only an *exact* duplicate — same
+  `(app_id, title_filter)` **and** same workspace + monitor — so genuine
+  fallback stacks (see below) stay allowed while accidental true copies
+  are caught.
+- **Reorder with ↑ / ↓** — rules are matched top-to-bottom and the first
+  applicable match wins, so order matters when two rules could touch the
+  same window; the arrows move a rule up or down the list.
+- **Monitor fallback** — you can add several rules for the *same* window
+  that target different workspaces/monitors. The applet applies the
+  first (top-most) one whose target monitor is currently connected. So
+  a pair like "Slack → workspace 1 on `DP-4`" above "Slack → workspace 1
+  on `eDP-1`" sends Slack to the external screen when it's plugged in and
+  falls back to the laptop panel when it isn't. Only an *exact* duplicate
+  (same window **and** same workspace + monitor) is rejected.
+- **Duplicate** clones a rule (disabled) and opens it in the editor. Because
+  the uniqueness check forbids an exact-duplicate `(app_id, title_filter)`,
+  you must differentiate the copy before saving it.
 
 **Pin your target workspaces** — COSMIC prunes unused workspaces
 dynamically (only the ones in active use plus one trailing extra
