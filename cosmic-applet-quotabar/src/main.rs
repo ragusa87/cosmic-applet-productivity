@@ -1,13 +1,16 @@
 mod anthropic;
 mod app;
 mod atomic;
+mod config;
 mod models;
 mod openai;
+mod settings;
 mod ui;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let debug_mode = args.iter().any(|a| a == "--debug");
+    let show_settings = args.iter().any(|a| a == "--show-settings");
 
     let default_filter = if debug_mode {
         "warn,cosmic_applet_quotabar=debug"
@@ -23,6 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if debug_mode {
         return debug_dump();
+    }
+
+    if show_settings {
+        settings::run()?;
+        return Ok(());
     }
 
     cosmic::applet::run::<app::AppModel>(())?;
