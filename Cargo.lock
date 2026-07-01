@@ -930,6 +930,7 @@ name = "cosmic-applet-gmail"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "cosmic-config",
  "cosmic-config-derive",
  "cosmic-google-common",
@@ -971,9 +972,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "cosmic-config",
+ "cosmic-config-derive",
  "dirs 5.0.1",
  "futures-util",
+ "libc",
  "libcosmic",
+ "notify-rust",
  "reqwest",
  "serde",
  "serde_json",
@@ -1123,6 +1128,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "keyring",
+ "notify-rust",
  "oauth2",
  "serde",
  "serde_json",
