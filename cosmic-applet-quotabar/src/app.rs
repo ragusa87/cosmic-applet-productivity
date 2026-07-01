@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,13 +8,14 @@ use cosmic::iced::widget::mouse_area;
 use cosmic::iced::{Limits, Subscription, window::Id};
 use cosmic::surface::{self, action::destroy_popup};
 use cosmic::widget::button;
+use cosmic_config::CosmicConfigEntry;
 use futures_util::SinkExt;
 use tokio::signal::unix::{SignalKind, signal};
 
+use crate::config::{APP_ID, Config};
 use crate::models::{Provider, ProviderSnapshot, RefreshError};
 use crate::{anthropic, openai, ui};
 
-const APP_ID: &str = "com.github.ragusa87.CosmicAppletQuotaBar";
 const ICON_SVG: &[u8] =
     include_bytes!("../data/icons/com.github.ragusa87.CosmicAppletQuotaBar.svg");
 const REFRESH_INTERVAL: Duration = Duration::from_mins(5);
@@ -21,12 +23,17 @@ const REFRESH_INTERVAL: Duration = Duration::from_mins(5);
 pub struct AppModel {
     pub core: cosmic::Core,
     pub client: Arc<reqwest::Client>,
+    pub config: Config,
     pub snapshots: Vec<ProviderSnapshot>,
     pub errors: Vec<RefreshError>,
     pub refreshing: bool,
     pub last_refresh: Option<chrono::DateTime<chrono::Utc>>,
     pub info_popup: Option<Id>,
     pub menu_popup: Option<Id>,
+    /// Last observed usage percent per window (keyed `provider:window`). Used to
+    /// notify only on the *rising edge* — when a window crosses from below the
+    /// threshold to at/above it — rather than on every poll while it stays high.
+    pub last_used: HashMap<String, f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +47,9 @@ pub enum Message {
         snapshots: Vec<ProviderSnapshot>,
         errors: Vec<RefreshError>,
     },
+    OpenSettings,
+    UpdateConfig(Config),
+    NoOp,
 }
 
 impl cosmic::Application for AppModel {
@@ -62,15 +72,24 @@ impl cosmic::Application for AppModel {
             tracing::warn!(error = %e, "falling back to default reqwest client");
             reqwest::Client::new()
         });
+        let config = cosmic_config::Config::new(APP_ID, Config::VERSION)
+            .map(|ctx| match Config::get_entry(&ctx) {
+                Ok(c) => c,
+                Err((_errors, c)) => c,
+            })
+            .unwrap_or_default();
+
         let app = AppModel {
             core,
             client: Arc::new(client),
+            config,
             snapshots: Vec::new(),
             errors: Vec::new(),
             refreshing: false,
             last_refresh: None,
             info_popup: None,
             menu_popup: None,
+            last_used: HashMap::new(),
         };
         let kick = cosmic::task::message(cosmic::Action::App(Message::Refresh));
         (app, kick)
@@ -139,7 +158,11 @@ impl cosmic::Application for AppModel {
 
     fn subscription(&self) -> Subscription<Self::Message> {
         let tick = cosmic::iced::time::every(REFRESH_INTERVAL).map(|_| Message::Refresh);
-        Subscription::batch([tick, sigusr2_subscription()])
+        let watch = self
+            .core()
+            .watch_config::<Config>(APP_ID)
+            .map(|update| Message::UpdateConfig(update.config));
+        Subscription::batch([tick, watch, sigusr2_subscription()])
     }
 
     #[allow(clippy::too_many_lines)]
@@ -205,7 +228,36 @@ impl cosmic::Application for AppModel {
                 self.snapshots = snapshots;
                 self.errors = errors;
                 self.last_refresh = Some(chrono::Utc::now());
+                self.check_alerts();
             }
+
+            Message::OpenSettings => {
+                let destroy_menu = self
+                    .menu_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                let launch = cosmic::task::future(async {
+                    match std::env::current_exe() {
+                        Ok(path) => {
+                            if let Err(e) = tokio::process::Command::new(path)
+                                .arg("--show-settings")
+                                .spawn()
+                            {
+                                tracing::warn!(error = %e, "failed to spawn settings binary");
+                            }
+                        }
+                        Err(e) => tracing::warn!(error = %e, "current_exe() failed"),
+                    }
+                    Message::NoOp
+                });
+                return Task::batch([destroy_menu, launch]);
+            }
+
+            Message::UpdateConfig(config) => {
+                self.config = config;
+            }
+
+            Message::NoOp => {}
         }
         Task::none()
     }
@@ -213,6 +265,62 @@ impl cosmic::Application for AppModel {
     fn style(&self) -> Option<cosmic::iced::theme::Style> {
         Some(cosmic::applet::style())
     }
+}
+
+impl AppModel {
+    /// Notify on the *rising edge*: when a usage window crosses from below the
+    /// threshold to at/above it. Staying above across many polls fires nothing
+    /// (the previous reading was already over); dropping below (e.g. a window
+    /// reset) re-arms it. Compared against the stored previous percent rather
+    /// than the API's reset timestamp, which can wobble between polls.
+    fn check_alerts(&mut self) {
+        let threshold = f64::from(self.config.alert_threshold_pct);
+
+        for snap in &self.snapshots {
+            let provider = snap.provider.display_name();
+            for (label, window) in [
+                ("Daily", snap.short.as_ref()),
+                ("Weekly", snap.weekly.as_ref()),
+            ] {
+                let Some(w) = window else { continue };
+                let key = format!("{provider}:{label}");
+                let prev = self.last_used.insert(key, w.used_percent);
+
+                // `alert_enabled` gates the notification, but we still track
+                // `last_used` so re-enabling doesn't re-fire on an already-high
+                // window.
+                if self.config.alert_enabled && should_alert(prev, w.used_percent, threshold) {
+                    notify(
+                        "AI quota alert",
+                        &format!("{provider} {label} usage at {}%", round_pct(w.used_percent)),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Rising-edge test for the threshold alert: fire only when a window crosses
+/// from below the threshold to at/above it. `prev` is the previous reading for
+/// that window (`None` if never seen). Staying at/above (prev already over)
+/// returns `false`; dropping back below then rising re-arms it.
+fn should_alert(prev: Option<f64>, current: f64, threshold: f64) -> bool {
+    current >= threshold && prev.is_none_or(|p| p < threshold)
+}
+
+/// Best-effort desktop notification. Kept inline (rather than sharing
+/// `cosmic-google-common::notify`) because quotabar is MIT-licensed and must
+/// not depend on the GPL common crate.
+fn notify(summary: &str, body: &str) {
+    let summary = summary.to_owned();
+    let body = body.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let mut n = notify_rust::Notification::new();
+        n.summary(&summary).body(&body).icon(APP_ID);
+        if let Err(e) = n.show() {
+            tracing::warn!(error = %e, "failed to show quota alert");
+        }
+    });
 }
 
 fn dispatch_surface(a: surface::Action) -> Task<Message> {
@@ -338,4 +446,51 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
         })),
     );
     dispatch_surface(action)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_alert;
+
+    const T: f64 = 90.0;
+
+    #[test]
+    fn fires_on_rising_edge() {
+        // Below → over the threshold.
+        assert!(should_alert(Some(85.0), 92.0, T));
+    }
+
+    #[test]
+    fn fires_exactly_at_threshold() {
+        assert!(should_alert(Some(89.0), 90.0, T));
+    }
+
+    #[test]
+    fn fires_on_first_observation_when_over() {
+        // No previous reading (startup / first poll) and already over.
+        assert!(should_alert(None, 95.0, T));
+    }
+
+    #[test]
+    fn silent_on_first_observation_when_under() {
+        assert!(!should_alert(None, 50.0, T));
+    }
+
+    #[test]
+    fn silent_while_staying_above() {
+        // Previous reading already over → don't re-nag on the next poll.
+        assert!(!should_alert(Some(91.0), 95.0, T));
+        assert!(!should_alert(Some(90.0), 90.0, T));
+    }
+
+    #[test]
+    fn silent_when_under() {
+        assert!(!should_alert(Some(50.0), 80.0, T));
+    }
+
+    #[test]
+    fn rearms_after_dropping_below() {
+        // Dropped below (e.g. the window reset), then climbed back over → fire.
+        assert!(should_alert(Some(10.0), 91.0, T));
+    }
 }

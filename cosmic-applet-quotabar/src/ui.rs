@@ -15,6 +15,7 @@ pub fn menu_view<'a>() -> Element<'a, Message> {
         .padding(4)
         .spacing(0)
         .push(menu_button(text::body("Refresh")).on_press(Message::RefreshFromMenu))
+        .push(menu_button(text::body("Settings\u{2026}")).on_press(Message::OpenSettings))
         .into()
 }
 
