@@ -28,6 +28,10 @@ pub struct SettingsApp {
     // the dropdown always has something visible to render when nothing real
     // is selected. The real items live at index 1..=N.
     workspace_labels: Vec<String>,
+    // Selectable workspace destinations, parallel to `workspace_labels[1..]`
+    // (label index 0 is the synthetic "pick…" placeholder). `form.workspace_idx`
+    // indexes into this. Rebuilt from the live snapshot in `refresh_labels`.
+    ws_choices: Vec<WsChoice>,
     toplevel_labels: Vec<String>,
     form: Form,
     status: Option<Status>,
@@ -127,6 +131,9 @@ pub enum Msg {
     EditRule(Uuid),
     CancelEdit,
     DeleteRule(Uuid),
+    DuplicateRule(Uuid),
+    MoveRuleUp(Uuid),
+    MoveRuleDown(Uuid),
     ToggleEnabled(Uuid),
     TryNow(Uuid),
     ClearTryResult {
@@ -169,7 +176,9 @@ impl cosmic::Application for SettingsApp {
         let header = text::title3("COSMIC Window Rules");
         let sub = text::caption(
             "When a window matching App ID (and optionally a title substring) appears, \
-             send it to the chosen workspace once.",
+             send it to the chosen workspace once. Add several rules for the same \
+             window to build a fallback: the topmost whose monitor is connected wins \
+             (reorder with ↑/↓).",
         );
 
         let form_open = self.form.mode.is_open();
@@ -189,11 +198,14 @@ impl cosmic::Application for SettingsApp {
         let rules_body: Element<'_, Msg> = if self.config.rules.is_empty() {
             text::caption("No rules yet. Click \"Add rule\" to get started.").into()
         } else {
+            let total = self.config.rules.len();
             let mut col = Column::new().spacing(6);
-            for r in &self.config.rules {
+            for (idx, r) in self.config.rules.iter().enumerate() {
                 col = col.push(rule_row(
                     r,
                     &self.workspaces,
+                    idx,
+                    total,
                     form_open,
                     editing_id,
                     self.try_results.get(&r.id).map(|e| &e.outcome),
@@ -255,12 +267,15 @@ impl cosmic::Application for SettingsApp {
                 self.form = Form::default();
                 self.form.mode = FormMode::Creating;
                 self.status = None;
+                // Drop any leftover "not connected" entry from a prior edit.
+                self.refresh_labels();
             }
             Msg::SaveRule => self.save_rule(),
             Msg::EditRule(id) => self.start_edit(id),
             Msg::CancelEdit => {
                 let was_editing = matches!(self.form.mode, FormMode::Editing(_));
                 self.form = Form::default();
+                self.refresh_labels();
                 self.status = Some(Status::info(if was_editing {
                     "Edit cancelled."
                 } else {
@@ -268,6 +283,9 @@ impl cosmic::Application for SettingsApp {
                 }));
             }
             Msg::DeleteRule(id) => self.delete_rule(id),
+            Msg::DuplicateRule(id) => self.duplicate_rule(id),
+            Msg::MoveRuleUp(id) => self.move_rule(id, -1),
+            Msg::MoveRuleDown(id) => self.move_rule(id, 1),
             Msg::ToggleEnabled(id) => self.toggle_enabled(id),
             Msg::TryNow(id) => return self.try_now(id),
             Msg::ClearTryResult { id, token } => {
@@ -326,25 +344,23 @@ impl SettingsApp {
         }
         self.toplevel_labels = tl;
 
-        let ws_count = self.workspaces.len();
-        let mut ws = Vec::with_capacity(self.workspaces.len() + 1);
+        self.ws_choices = build_ws_choices(&self.workspaces, self.editing_rule());
+        let ws_count = self.ws_choices.len();
+        let mut ws = Vec::with_capacity(ws_count + 1);
         ws.push(if ws_count == 0 {
             "— no workspaces yet —".to_owned()
         } else {
             format!("— pick one of {ws_count} workspace(s) —")
         });
-        for w in &self.workspaces {
-            let name = display_ws_name(&w.name, w.index as usize);
-            let mut label = match &w.output_name {
-                Some(out) => format!("{name}  ({out})"),
-                None => name,
-            };
-            if w.is_pinned {
-                label.push_str("  (pinned)");
-            }
-            ws.push(label);
+        for c in &self.ws_choices {
+            ws.push(c.label.clone());
         }
         self.workspace_labels = ws;
+    }
+
+    fn editing_rule(&self) -> Option<&Rule> {
+        let id = self.form.mode.editing_id()?;
+        self.config.rules.iter().find(|r| r.id == id)
     }
 
     fn save_rule(&mut self) {
@@ -357,16 +373,12 @@ impl SettingsApp {
             self.status = Some(Status::error("Choose a target workspace."));
             return;
         };
-        let Some(ws) = self.workspaces.get(ws_idx) else {
+        let Some(choice) = self.ws_choices.get(ws_idx) else {
             self.status = Some(Status::error("Selected workspace no longer exists."));
             return;
         };
-        let target = if ws.name.is_empty() {
-            WorkspaceTarget::ByIndex(ws.index)
-        } else {
-            WorkspaceTarget::ByName(ws.name.clone())
-        };
-        let target_output = ws.output_name.clone();
+        let target = choice.target.clone();
+        let target_output = choice.output.clone();
         let title = self.form.title_contains.trim();
         let title_contains = if title.is_empty() {
             None
@@ -374,26 +386,27 @@ impl SettingsApp {
             Some(title.to_owned())
         };
 
-        // Candidate rule used purely for the uniqueness check. Its id is
-        // discarded if we end up editing in place.
+        // The new rule (its id is discarded if we end up editing in place).
         let mut candidate = Rule::new(&app_id, target.clone());
         candidate.title_contains.clone_from(&title_contains);
         candidate.target_output.clone_from(&target_output);
         candidate.switch_to_workspace = self.form.switch_to_workspace;
         candidate.skip_empty_title = self.form.skip_empty_title;
 
-        // Reject a rule that would compete with an existing one for the same
-        // toplevels: same app_id + same (or both absent) title_contains.
-        // When editing, the rule being edited is exempted from the check.
+        // Reject only an *exact* duplicate — same window match AND same
+        // workspace+output destination. Two rules matching the same window but
+        // pointing at different workspaces/monitors are allowed: they form an
+        // ordered fallback list (see `select_rule` in app.rs). When editing,
+        // the rule being edited is exempted.
         let editing_id = self.form.mode.editing_id();
         if let Some(dup) = self
             .config
             .rules
             .iter()
-            .find(|r| editing_id != Some(r.id) && r.matches_same_windows(&candidate))
+            .find(|r| editing_id != Some(r.id) && r.is_duplicate_of(&candidate))
         {
             self.status = Some(Status::error(format!(
-                "A rule for {} (same title filter) already targets workspace {} — \
+                "An identical rule for {} already targets workspace {} — \
                  edit or delete it instead.",
                 dup.app_id,
                 dup.target.display()
@@ -426,6 +439,7 @@ impl SettingsApp {
         }
         let was_editing = editing_id.is_some();
         self.form = Form::default();
+        self.refresh_labels();
         self.status = Some(Status::info(if was_editing {
             "Rule updated."
         } else {
@@ -438,30 +452,25 @@ impl SettingsApp {
             self.status = Some(Status::error("Rule not found."));
             return;
         };
-        // Find the workspace index whose snapshot matches both the rule's
-        // target key AND its saved output (when present). Without the output
-        // disambiguator, a rule saved against "1 on DP-4" would load with the
-        // dropdown pointing at "1 on eDP-1" on a multi-monitor session.
-        let workspace_idx = self.workspaces.iter().position(|w| {
-            let key_ok = match &rule.target {
-                WorkspaceTarget::ByName(n) => w.name == *n,
-                WorkspaceTarget::ByIndex(i) => w.index == *i,
-            };
-            let output_ok = rule
-                .target_output
-                .as_deref()
-                .is_none_or(|want| w.output_name.as_deref() == Some(want));
-            key_ok && output_ok
-        });
         self.form = Form {
             app_id: rule.app_id.clone(),
-            title_contains: rule.title_contains.unwrap_or_default(),
-            workspace_idx,
+            title_contains: rule.title_contains.clone().unwrap_or_default(),
+            workspace_idx: None,
             picked_toplevel_idx: None,
             switch_to_workspace: rule.switch_to_workspace,
             skip_empty_title: rule.skip_empty_title,
             mode: FormMode::Editing(id),
         };
+        // Rebuild the choices now that we're editing: `build_ws_choices` keeps
+        // the rule's saved destination selectable even if its monitor is
+        // disconnected (a synthetic "not connected" entry), so the dropdown can
+        // point at it and the rule can be saved unchanged. Resolve the index by
+        // exact (target, output) match — the entry is guaranteed present.
+        self.refresh_labels();
+        self.form.workspace_idx = self
+            .ws_choices
+            .iter()
+            .position(|c| c.target == rule.target && c.output == rule.target_output);
         self.status = Some(Status::info(format!("Editing rule for {}", rule.app_id)));
     }
 
@@ -471,6 +480,42 @@ impl SettingsApp {
         if self.form.mode.editing_id() == Some(id) {
             self.form = Form::default();
         }
+        self.refresh_labels();
+        if let Err(e) = self.config.save() {
+            self.status = Some(Status::error(format!("Save failed: {e}")));
+        }
+    }
+
+    fn duplicate_rule(&mut self, id: Uuid) {
+        let Some(pos) = self.config.rules.iter().position(|r| r.id == id) else {
+            return;
+        };
+        // Insert the copy disabled and directly after the source, then open it
+        // in the editor. The uniqueness check rejects saving it as-is (same
+        // app_id + title as the original), forcing the user to differentiate
+        // it before it can act.
+        let mut dup = self.config.rules[pos].duplicated();
+        dup.enabled = false;
+        let new_id = dup.id;
+        self.config.rules.insert(pos + 1, dup);
+        if let Err(e) = self.config.save() {
+            self.status = Some(Status::error(format!("Save failed: {e}")));
+            return;
+        }
+        self.start_edit(new_id);
+        self.status = Some(Status::info("Duplicated — adjust the copy, then save."));
+    }
+
+    fn move_rule(&mut self, id: Uuid, delta: i32) {
+        let Some(pos) = self.config.rules.iter().position(|r| r.id == id) else {
+            return;
+        };
+        let swap_with = match delta {
+            -1 if pos > 0 => pos - 1,
+            1 if pos + 1 < self.config.rules.len() => pos + 1,
+            _ => return,
+        };
+        self.config.rules.swap(pos, swap_with);
         if let Err(e) = self.config.save() {
             self.status = Some(Status::error(format!("Save failed: {e}")));
         }
@@ -635,9 +680,12 @@ fn pin_workspace_tip<'a>() -> Element<'a, Msg> {
         .into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rule_row<'a>(
     r: &'a Rule,
     workspaces: &'a [WorkspaceSnapshot],
+    idx: usize,
+    total: usize,
     form_open: bool,
     editing_id: Option<Uuid>,
     try_outcome: Option<&TryOutcome>,
@@ -666,6 +714,23 @@ fn rule_row<'a>(
     if !form_open || is_being_edited {
         edit_btn = edit_btn.on_press(Msg::EditRule(r.id));
     }
+
+    // Reorder + duplicate are only actionable when no form is open, so they
+    // can't fight with an in-progress edit. First-match-wins makes order
+    // meaningful, hence up/down.
+    let mut up_btn = button::standard("\u{2191}");
+    if !form_open && idx > 0 {
+        up_btn = up_btn.on_press(Msg::MoveRuleUp(r.id));
+    }
+    let mut down_btn = button::standard("\u{2193}");
+    if !form_open && idx + 1 < total {
+        down_btn = down_btn.on_press(Msg::MoveRuleDown(r.id));
+    }
+    let mut dup_btn = button::standard("Duplicate");
+    if !form_open {
+        dup_btn = dup_btn.on_press(Msg::DuplicateRule(r.id));
+    }
+
     let del_btn = button::destructive("Delete").on_press(Msg::DeleteRule(r.id));
 
     // Try-now: only actionable when the rule is enabled AND no form is open.
@@ -674,7 +739,13 @@ fn rule_row<'a>(
         try_link = try_link.on_press(Msg::TryNow(r.id));
     }
 
-    let buttons_row = Row::new().spacing(8).push(edit_btn).push(del_btn);
+    let buttons_row = Row::new()
+        .spacing(8)
+        .push(up_btn)
+        .push(down_btn)
+        .push(edit_btn)
+        .push(dup_btn)
+        .push(del_btn);
     let mut actions = Column::new()
         .spacing(2)
         .align_x(Alignment::End)
@@ -750,5 +821,148 @@ fn display_ws_name(name: &str, idx: usize) -> String {
         format!("Workspace {}", idx + 1)
     } else {
         format!("Workspace {name}")
+    }
+}
+
+/// A selectable workspace destination in the rule editor's dropdown, carrying
+/// the exact `(target, output)` it resolves to. Usually a live workspace; when
+/// editing a rule whose target monitor is disconnected, a synthetic entry is
+/// appended so the saved destination stays selectable (and the rule saveable).
+#[derive(Debug, Clone)]
+struct WsChoice {
+    label: String,
+    target: WorkspaceTarget,
+    output: Option<String>,
+}
+
+/// Build the ordered dropdown choices: every live workspace, plus — when
+/// `editing`'s destination isn't among them (e.g. its monitor is unplugged) — a
+/// trailing "not connected" entry for that saved destination. Pure so it can be
+/// unit-tested.
+fn build_ws_choices(workspaces: &[WorkspaceSnapshot], editing: Option<&Rule>) -> Vec<WsChoice> {
+    let mut choices: Vec<WsChoice> = workspaces
+        .iter()
+        .map(|w| {
+            let name = display_ws_name(&w.name, w.index as usize);
+            let mut label = match &w.output_name {
+                Some(out) => format!("{name}  ({out})"),
+                None => name,
+            };
+            if w.is_pinned {
+                label.push_str("  (pinned)");
+            }
+            let target = if w.name.is_empty() {
+                WorkspaceTarget::ByIndex(w.index)
+            } else {
+                WorkspaceTarget::ByName(w.name.clone())
+            };
+            WsChoice {
+                label,
+                target,
+                output: w.output_name.clone(),
+            }
+        })
+        .collect();
+
+    if let Some(rule) = editing {
+        let present = choices
+            .iter()
+            .any(|c| c.target == rule.target && c.output == rule.target_output);
+        if !present {
+            let name = match &rule.target {
+                WorkspaceTarget::ByName(n) => format!("Workspace {n}"),
+                WorkspaceTarget::ByIndex(i) => format!("Workspace {}", i + 1),
+            };
+            let label = match &rule.target_output {
+                Some(out) => format!("{name}  ({out})  — not connected"),
+                None => format!("{name}  — not connected"),
+            };
+            choices.push(WsChoice {
+                label,
+                target: rule.target.clone(),
+                output: rule.target_output.clone(),
+            });
+        }
+    }
+    choices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WsChoice, build_ws_choices};
+    use crate::models::{Rule, WorkspaceTarget};
+    use crate::wayland::WorkspaceSnapshot;
+
+    fn ws(name: &str, index: u32, output: Option<&str>) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            name: name.into(),
+            index,
+            output_name: output.map(Into::into),
+            is_pinned: false,
+        }
+    }
+
+    fn rule_on(target: WorkspaceTarget, output: Option<&str>) -> Rule {
+        let mut r = Rule::new("slack", target);
+        r.target_output = output.map(Into::into);
+        r
+    }
+
+    fn resolve(choices: &[WsChoice], rule: &Rule) -> Option<usize> {
+        choices
+            .iter()
+            .position(|c| c.target == rule.target && c.output == rule.target_output)
+    }
+
+    #[test]
+    fn disconnected_target_stays_selectable() {
+        // Rule targets workspace "1" on DP-4, but only eDP-1 is connected.
+        let live = vec![ws("1", 0, Some("eDP-1"))];
+        let editing = rule_on(WorkspaceTarget::ByName("1".into()), Some("DP-4"));
+
+        let choices = build_ws_choices(&live, Some(&editing));
+
+        // Live workspace + a synthetic entry for the disconnected target.
+        assert_eq!(choices.len(), 2);
+        let synth = &choices[1];
+        assert_eq!(synth.target, WorkspaceTarget::ByName("1".into()));
+        assert_eq!(synth.output.as_deref(), Some("DP-4"));
+        assert!(synth.label.contains("not connected"));
+
+        // The saved destination resolves to the synthetic entry, so the editor
+        // can preselect it and the rule saves unchanged.
+        assert_eq!(resolve(&choices, &editing), Some(1));
+    }
+
+    #[test]
+    fn connected_target_adds_no_synthetic() {
+        let live = vec![ws("1", 0, Some("DP-4"))];
+        let editing = rule_on(WorkspaceTarget::ByName("1".into()), Some("DP-4"));
+
+        let choices = build_ws_choices(&live, Some(&editing));
+
+        assert_eq!(choices.len(), 1);
+        assert!(!choices[0].label.contains("not connected"));
+        assert_eq!(resolve(&choices, &editing), Some(0));
+    }
+
+    #[test]
+    fn same_name_different_monitor_still_synthesizes() {
+        // A workspace "1" exists, but on the wrong monitor — the exact
+        // (target, output) pair is still absent, so we keep the saved one.
+        let live = vec![ws("1", 0, Some("eDP-1")), ws("2", 1, Some("eDP-1"))];
+        let editing = rule_on(WorkspaceTarget::ByName("1".into()), Some("DP-4"));
+
+        let choices = build_ws_choices(&live, Some(&editing));
+
+        assert_eq!(choices.len(), 3);
+        assert_eq!(resolve(&choices, &editing), Some(2));
+    }
+
+    #[test]
+    fn no_editing_yields_only_live_workspaces() {
+        let live = vec![ws("1", 0, Some("DP-4"))];
+        let choices = build_ws_choices(&live, None);
+        assert_eq!(choices.len(), 1);
     }
 }
