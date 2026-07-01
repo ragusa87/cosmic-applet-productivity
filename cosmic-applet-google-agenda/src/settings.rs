@@ -43,6 +43,8 @@ pub enum Msg {
     ToggleShowTime(bool),
     ToggleShowProgress(bool),
     ToggleNotify(bool),
+    SetLeadIdx(usize),
+    TryNotify,
     Authorize,
     AuthorizeDone(Result<(String, String, Tokens), String>),
     Cancel,
@@ -109,6 +111,8 @@ impl cosmic::Application for SettingsApp {
             on_toggle_show_time: Msg::ToggleShowTime,
             on_toggle_show_progress: Msg::ToggleShowProgress,
             on_toggle_notify: Msg::ToggleNotify,
+            on_lead_change: Msg::SetLeadIdx,
+            on_try_notify: Msg::TryNotify,
             authorize: Msg::Authorize,
             cancel: Msg::Cancel,
         };
@@ -118,6 +122,7 @@ impl cosmic::Application for SettingsApp {
             self.config.show_time,
             self.config.show_progress,
             self.config.notify,
+            self.config.notification_lead_secs,
             &self.status,
             self.authorizing,
             &handlers,
@@ -148,6 +153,27 @@ impl cosmic::Application for SettingsApp {
             Msg::ToggleNotify(on) => {
                 self.config.notify = on;
                 persist_config(&self.config);
+            }
+
+            Msg::SetLeadIdx(idx) => {
+                if let Some(&secs) = ui::LEAD_PRESETS_SECS.get(idx) {
+                    self.config.notification_lead_secs = secs;
+                    persist_config(&self.config);
+                }
+            }
+
+            Msg::TryNotify => {
+                // Fire a dummy notification in the same format as a real meeting
+                // reminder (see `decide_notify` in app.rs): summary is the lead
+                // time, body is "<title> — <HH:MM>".
+                let lead_min = self.config.notification_lead_secs / 60;
+                let start = chrono::Local::now()
+                    + chrono::Duration::seconds(i64::from(self.config.notification_lead_secs));
+                cosmic_google_common::notify::show(
+                    &format!("Meeting in {lead_min} min"),
+                    &format!("Team standup \u{2014} {}", start.format("%H:%M")),
+                    APP_ID,
+                );
             }
 
             Msg::LoadTokens(Some(tokens)) => {
