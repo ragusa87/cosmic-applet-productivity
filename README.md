@@ -318,7 +318,7 @@ template (`[taxi].file`, default `~/zebra/%Y/%m.tks`), date format
 `[<backend>_aliases]`).
 
 **Configuration** — non-secret settings live in
-`~/.config/com.github.ragusa87.CosmicAppletTaxi/v2/`:
+`~/.config/com.github.ragusa87.CosmicAppletTaxi/v1/`:
 
 | Key                   | Default                                     | Notes                                          |
 |-----------------------|---------------------------------------------|------------------------------------------------|

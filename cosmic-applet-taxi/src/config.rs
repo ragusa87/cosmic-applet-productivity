@@ -4,7 +4,7 @@ use cosmic_config_derive::CosmicConfigEntry;
 pub const APP_ID: &str = "com.github.ragusa87.CosmicAppletTaxi";
 
 #[derive(Debug, Clone, CosmicConfigEntry, Eq, PartialEq)]
-#[version = 3]
+#[version = 1]
 pub struct Config {
     pub cutover_hour: u8,
     pub merge_gap_minutes: u32,

@@ -217,13 +217,21 @@ impl cosmic::Application for AppModel {
             })
             .unwrap_or_default();
 
-        let state = AppState::load().unwrap_or_else(|e| {
+        let mut state = AppState::load().unwrap_or_else(|e| {
             tracing::warn!(error = %e, "loading state failed; starting fresh");
             AppState {
                 total_selected: true,
                 ..AppState::default()
             }
         });
+
+        // We're up and running, so the session is unlocked: resolve any lock
+        // that was still pending at our last exit instead of leaving it armed.
+        if state.resume_unlocked(Local::now(), config.enable_autopause)
+            && let Err(e) = state.save()
+        {
+            tracing::warn!(error = %e, "persisting unlock-on-restart failed");
+        }
 
         let app = AppModel {
             core,
@@ -356,11 +364,23 @@ impl cosmic::Application for AppModel {
                     return Task::none();
                 }
                 let now = Local::now();
-                self.state.locked_at = Some(now);
+                // Closes out any stale prior lock (unlock never observed) as
+                // its own AFK span before arming this one, so the away period
+                // can't balloon across this lock to a later unlock.
+                self.state.begin_lock(now);
                 self.state.auto_pause_all(now);
                 self.persist();
             }
             Message::LockEvt(LockEventDup::Unlocked) => {
+                // Master switch off → clear any lock bookkeeping left over from
+                // before it was disabled and do nothing else (no AFK log, no
+                // notification). Mirrors the Locked gate above.
+                if !self.config.enable_autopause {
+                    if self.state.clear_lock_bookkeeping() {
+                        self.persist();
+                    }
+                    return Task::none();
+                }
                 // Log the away period as an AFK entry (every lock/unlock).
                 if let Some(from) = self.state.take_locked_at() {
                     self.state.record_afk(from, Local::now());
@@ -859,6 +879,12 @@ impl AppModel {
 /// (with `# original …` comments) followed by an optional aggregated
 /// zero-duration block. Shared between the panel's auto-export pipeline
 /// and the export dialog's preview.
+///
+/// The AFK timer is a local record only — its alias isn't a real Zebra
+/// alias, so every emitted entry line is commented out with `# ` so
+/// `taxi` ignores it (lines already starting with `#`, e.g. the
+/// `# original …` provenance lines, are left as-is). Doing this here
+/// keeps the auto-export and the manual export preview consistent.
 pub fn build_block_lines(
     quantized: &[crate::sessions::Span],
     aggregate: Option<&crate::sessions::ZeroAggregate>,
@@ -868,6 +894,18 @@ pub fn build_block_lines(
     let mut out = crate::sessions::export_lines(quantized, alias);
     if let Some(agg) = aggregate {
         out.extend(crate::sessions::aggregate_lines(agg, alias, grid_minutes));
+    }
+    if alias == state::AFK_ALIAS {
+        out = out
+            .into_iter()
+            .map(|l| {
+                if l.starts_with('#') {
+                    l
+                } else {
+                    format!("# {l}")
+                }
+            })
+            .collect();
     }
     out
 }
@@ -915,24 +953,6 @@ fn run_auto_export(
             }
 
             let block_lines = build_block_lines(&quantized, agg.as_ref(), &timer.alias, grid);
-            // The AFK timer is a local record only — write it to the .tks
-            // commented out so `taxi` ignores it (its alias isn't a real
-            // Zebra alias). Lines already starting with `#` (e.g. the
-            // `# original …` provenance lines) are left as-is.
-            let block_lines: Vec<String> = if timer.alias == state::AFK_ALIAS {
-                block_lines
-                    .into_iter()
-                    .map(|l| {
-                        if l.starts_with('#') {
-                            l
-                        } else {
-                            format!("# {l}")
-                        }
-                    })
-                    .collect()
-            } else {
-                block_lines
-            };
             by_date.entry(date).or_default().extend(block_lines);
 
             for (idx, s) in timer.sessions.iter().enumerate() {
@@ -1231,6 +1251,32 @@ mod tests {
                 .flat_map(|d| &d.entries)
                 .all(|e| e.alias != state::AFK_ALIAS),
             "AFK must not appear as a parsed (billable) entry"
+        );
+    }
+
+    #[test]
+    fn build_block_lines_comments_out_afk_entries() {
+        // Regression: the manual export dialog builds its preview straight
+        // from `build_block_lines`, so the AFK-commenting must live here (not
+        // only in `run_auto_export`) or AFK shows up as a billable entry
+        // like `AFK 12:00-14:45` in the preview.
+        let span = crate::sessions::Span {
+            start: Local.with_ymd_and_hms(2026, 5, 12, 12, 0, 0).unwrap(),
+            end: Local.with_ymd_and_hms(2026, 5, 12, 14, 45, 0).unwrap(),
+            description: String::new(),
+            original: None,
+        };
+
+        let afk = build_block_lines(std::slice::from_ref(&span), None, state::AFK_ALIAS, 15);
+        assert!(
+            afk.iter().all(|l| l.trim_start().starts_with('#')),
+            "every AFK line must be commented out, got: {afk:?}"
+        );
+
+        let normal = build_block_lines(std::slice::from_ref(&span), None, "_x", 15);
+        assert!(
+            normal.iter().any(|l| !l.trim_start().starts_with('#')),
+            "normal timer must keep a real (uncommented) entry, got: {normal:?}"
         );
     }
 
