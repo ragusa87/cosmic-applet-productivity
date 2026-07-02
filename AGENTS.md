@@ -789,8 +789,9 @@ src/
   in the popup — one provider failing never blanks the other.
 - **Panel button rendering**: icon + worst-used `N%` label (max of all
   available `used_percent` values across `(provider, window)` pairs).
-  When no snapshot is available yet, the label is omitted — the bar-
-  chart icon is still shown so the panel item is clickable.
+  When no snapshot is available yet, the label still renders using an
+  ellipsis placeholder (`...`) so the panel item stays stable and
+  clickable.
 - **Popup**: per-provider card with two `canvas::Program`
   horizontal bars (Daily = 5h, Weekly = 7d). The fill color steps
   through green → amber → orange → red at 50 / 75 / 90 %. The
