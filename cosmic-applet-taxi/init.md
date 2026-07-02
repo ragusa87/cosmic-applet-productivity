@@ -48,6 +48,8 @@ The crate lives next to two pre-existing Google-backed applets
   - something running → `[icon alias: description elapsed · total]`
   - description truncated past ~40 chars with `…`
   - vertical panel anchor degrades to just `[icon HH:MM]`
+  - the running timer's elapsed shows `HH:MM:SS` when `config.show_seconds`
+    is on (default), else `HH:MM`
 - **Auto-pause on screen lock / suspend.** Lock is detected over logind
   D-Bus (`org.freedesktop.login1` `Session.Lock` + `Manager.PrepareForSleep`,
   session resolved by PID via `logind-zbus`). Unlock is detected by a
