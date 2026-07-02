@@ -120,15 +120,16 @@ impl cosmic::Application for AppModel {
         .size(icon_size);
 
         let worst = worst_used_percent(&self.snapshots);
-        let label_text = worst.map(|w| format!("{}%", round_pct(w)));
+        let label_text =
+            worst.map_or_else(|| "\u{2026}".to_owned(), |w| format!("{}%", round_pct(w)));
 
         let mut row = Row::new()
             .align_y(cosmic::iced::Alignment::Center)
             .spacing(6)
             .push(icon);
-        if is_horizontal && let Some(text_str) = label_text {
+        if is_horizontal {
             row = row.push(
-                cosmic::widget::text(text_str)
+                cosmic::widget::text(label_text)
                     .size(label_size)
                     .height(Length::Fixed(icon_px))
                     .align_y(cosmic::iced::alignment::Vertical::Center),
