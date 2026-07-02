@@ -191,8 +191,8 @@ struct MoneyPayload {
     currency: Option<String>,
 }
 
-/// Convert minor units to a major-unit amount (`amount_minor / 10^exponent`).
-/// Exponent defaults to 2 when absent; returns `None` if no amount is present.
+// Convert minor units to a major-unit amount (`amount_minor / 10^exponent`).
+// Exponent defaults to 2 when absent; returns `None` if no amount is present.
 #[allow(clippy::cast_precision_loss)]
 fn money_major(m: &MoneyPayload) -> Option<f64> {
     let amount = m.amount_minor?;
