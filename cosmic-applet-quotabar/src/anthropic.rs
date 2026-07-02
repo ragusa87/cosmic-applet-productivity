@@ -180,7 +180,7 @@ struct SpendPayload {
     enabled: bool,
 }
 
-/// Money as minor units + exponent, e.g. `{amount_minor: 3877, exponent: 2}` = $38.77.
+// Money as minor units + exponent, e.g. `{amount_minor: 3877, exponent: 2}` = $38.77.
 #[derive(Debug, Deserialize)]
 struct MoneyPayload {
     #[serde(default)]
