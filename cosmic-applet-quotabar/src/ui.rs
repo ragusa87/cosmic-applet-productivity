@@ -81,8 +81,7 @@ fn provider_card(snapshot: &ProviderSnapshot) -> Element<'_, Message> {
     container(col).width(Length::Fill).padding(2).into()
 }
 
-/// Format a monetary amount for display. USD gets a `$` prefix; other
-/// currencies append their code (e.g. `38.70 EUR`).
+// USD gets a `$` prefix; other currencies append their code (e.g. `38.70 EUR`).
 fn format_money(value: f64, currency: &str) -> String {
     if currency == "USD" {
         format!("${value:.2}")
