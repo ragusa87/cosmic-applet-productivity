@@ -166,8 +166,8 @@ struct UsageWindowPayload {
     resets_at: Option<String>,
 }
 
-/// Post-plan usage-credit spend block. All fields are optional so an account
-/// without extra usage (or a future response reshape) never breaks parsing.
+// Post-plan usage-credit spend block. All fields are optional so an account
+// without extra usage (or a future response reshape) never breaks parsing.
 #[derive(Debug, Deserialize)]
 struct SpendPayload {
     #[serde(default)]
