@@ -35,6 +35,7 @@ pub struct SettingsApp {
 pub enum Msg {
     ToggleEnabled(bool),
     SetThresholdIdx(usize),
+    ToggleIgnoreCredits(bool),
     Close,
 }
 
@@ -85,6 +86,16 @@ impl cosmic::Application for SettingsApp {
              the threshold, and re-arms once it drops back below.",
         );
 
+        let credits = settings::section().title("Credits").add(settings::item(
+            "Hide credits until plan is used up",
+            toggler(self.config.ignore_credits_when_plan_used).on_toggle(Msg::ToggleIgnoreCredits),
+        ));
+
+        let credits_hint = text::caption(
+            "Keeps the pay-as-you-go credit row hidden until the daily or weekly \
+             window reaches 100%.",
+        );
+
         let content = Column::new()
             .padding(12)
             .spacing(10)
@@ -92,6 +103,8 @@ impl cosmic::Application for SettingsApp {
             .push(header)
             .push(alerts)
             .push(hint)
+            .push(credits)
+            .push(credits_hint)
             .push(button::standard("Close").on_press(Msg::Close));
 
         scrollable(content)
@@ -111,6 +124,10 @@ impl cosmic::Application for SettingsApp {
                     self.config.alert_threshold_pct = pct;
                     persist_config(&self.config);
                 }
+            }
+            Msg::ToggleIgnoreCredits(v) => {
+                self.config.ignore_credits_when_plan_used = v;
+                persist_config(&self.config);
             }
             Msg::Close => return cosmic::iced::exit(),
         }
