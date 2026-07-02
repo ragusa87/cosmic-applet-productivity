@@ -6,7 +6,7 @@ use cosmic::iced::{Alignment, Color, Length};
 use cosmic::widget::{Column, container, text};
 
 use crate::app::Message;
-use crate::models::{ProviderSnapshot, RefreshError, UsageWindow};
+use crate::models::{ProviderSnapshot, RefreshError, SpendInfo, UsageWindow};
 
 const ROW_WIDTH: f32 = 380.0;
 
@@ -74,8 +74,49 @@ fn provider_card(snapshot: &ProviderSnapshot) -> Element<'_, Message> {
     let mut col = Column::new().padding(10).spacing(8).push(header);
     col = col.push(bar_row("DAILY", snapshot.short.as_ref(), now));
     col = col.push(bar_row("WEEKLY", snapshot.weekly.as_ref(), now));
+    if let Some(spend) = snapshot.spend.as_ref().filter(|s| s.enabled) {
+        col = col.push(spend_row(spend));
+    }
 
     container(col).width(Length::Fill).padding(2).into()
+}
+
+// USD gets a `$` prefix; other currencies append their code (e.g. `38.70 EUR`).
+fn format_money(value: f64, currency: &str) -> String {
+    if currency == "USD" {
+        format!("${value:.2}")
+    } else {
+        format!("{value:.2} {currency}")
+    }
+}
+
+fn spend_label(spend: &SpendInfo) -> String {
+    let used = format_money(spend.used, &spend.currency);
+    match spend.limit {
+        Some(limit) => format!("{used} / {}", format_money(limit, &spend.currency)),
+        None => used,
+    }
+}
+
+fn spend_row(spend: &SpendInfo) -> Element<'_, Message> {
+    let bar = canvas(BarProgram {
+        used_percent: spend.percent,
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(10.0));
+
+    Row::new()
+        .align_y(Alignment::Center)
+        .spacing(10)
+        .width(Length::Fixed(ROW_WIDTH))
+        .push(text::caption("CREDITS").width(Length::Fixed(56.0)))
+        .push(bar)
+        .push(
+            text::caption(spend_label(spend))
+                .width(Length::Fixed(120.0))
+                .align_x(cosmic::iced::alignment::Horizontal::Right),
+        )
+        .into()
 }
 
 fn worst_badge(snapshot: &ProviderSnapshot) -> String {
@@ -227,5 +268,45 @@ fn bar_color(used_percent: f64) -> Color {
         Color::from_rgb(0.96, 0.62, 0.04)
     } else {
         Color::from_rgb(0.13, 0.77, 0.37)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_money_usd_prefixes_dollar() {
+        assert_eq!(format_money(38.77, "USD"), "$38.77");
+        assert_eq!(format_money(80.0, "USD"), "$80.00"); // rounds to 2 dp
+    }
+
+    #[test]
+    fn format_money_other_currency_appends_code() {
+        assert_eq!(format_money(38.7, "EUR"), "38.70 EUR");
+    }
+
+    #[test]
+    fn spend_label_shows_used_and_limit() {
+        let spend = SpendInfo {
+            used: 38.77,
+            limit: Some(80.0),
+            percent: 48.0,
+            currency: "USD".to_owned(),
+            enabled: true,
+        };
+        assert_eq!(spend_label(&spend), "$38.77 / $80.00");
+    }
+
+    #[test]
+    fn spend_label_used_only_without_limit() {
+        let spend = SpendInfo {
+            used: 38.77,
+            limit: None,
+            percent: 0.0,
+            currency: "USD".to_owned(),
+            enabled: true,
+        };
+        assert_eq!(spend_label(&spend), "$38.77");
     }
 }
