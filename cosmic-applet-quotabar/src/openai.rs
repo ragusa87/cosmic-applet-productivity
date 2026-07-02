@@ -284,5 +284,6 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
         provider: Provider::OpenAi,
         short,
         weekly,
+        spend: None,
     })
 }

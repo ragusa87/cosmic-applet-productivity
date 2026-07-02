@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::atomic;
-use crate::models::{Provider, ProviderSnapshot, UsageWindow};
+use crate::models::{Provider, ProviderSnapshot, SpendInfo, UsageWindow};
 
 const USAGE_ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
 const REFRESH_ENDPOINT: &str = "https://platform.claude.com/v1/oauth/token";
@@ -154,6 +154,8 @@ struct UsageResponse {
     five_hour: Option<UsageWindowPayload>,
     #[serde(default)]
     seven_day: Option<UsageWindowPayload>,
+    #[serde(default)]
+    spend: Option<SpendPayload>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +164,64 @@ struct UsageWindowPayload {
     utilization: Option<f64>,
     #[serde(default)]
     resets_at: Option<String>,
+}
+
+/// Post-plan usage-credit spend block. All fields are optional so an account
+/// without extra usage (or a future response reshape) never breaks parsing.
+#[derive(Debug, Deserialize)]
+struct SpendPayload {
+    #[serde(default)]
+    used: Option<MoneyPayload>,
+    #[serde(default)]
+    limit: Option<MoneyPayload>,
+    #[serde(default)]
+    percent: Option<f64>,
+    #[serde(default)]
+    enabled: bool,
+}
+
+/// Money as minor units + exponent, e.g. `{amount_minor: 3877, exponent: 2}` = $38.77.
+#[derive(Debug, Deserialize)]
+struct MoneyPayload {
+    #[serde(default)]
+    amount_minor: Option<i64>,
+    #[serde(default)]
+    exponent: Option<u32>,
+    #[serde(default)]
+    currency: Option<String>,
+}
+
+/// Convert minor units to a major-unit amount (`amount_minor / 10^exponent`).
+/// Exponent defaults to 2 when absent; returns `None` if no amount is present.
+#[allow(clippy::cast_precision_loss)]
+fn money_major(m: &MoneyPayload) -> Option<f64> {
+    let amount = m.amount_minor?;
+    let exponent = i32::try_from(m.exponent.unwrap_or(2)).ok()?;
+    Some(amount as f64 / 10f64.powi(exponent))
+}
+
+/// Map the raw spend payload into the display model. Returns `None` when there
+/// is no `used` amount to show; otherwise carries `enabled` through so the UI
+/// decides visibility.
+fn map_spend(payload: &SpendPayload) -> Option<SpendInfo> {
+    let used_money = payload.used.as_ref()?;
+    let used = money_major(used_money)?;
+    let limit = payload.limit.as_ref().and_then(money_major);
+    let percent = payload.percent.unwrap_or_else(|| match limit {
+        Some(limit) if limit > 0.0 => used / limit * 100.0,
+        _ => 0.0,
+    });
+    let currency = used_money
+        .currency
+        .clone()
+        .unwrap_or_else(|| "USD".to_owned());
+    Some(SpendInfo {
+        used,
+        limit,
+        percent,
+        currency,
+        enabled: payload.enabled,
+    })
 }
 
 fn parse_iso(s: &str) -> Option<DateTime<Utc>> {
@@ -241,10 +301,13 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
         })
     });
 
+    let spend = usage.spend.as_ref().and_then(map_spend);
+
     Ok(ProviderSnapshot {
         provider: Provider::Anthropic,
         short,
         weekly,
+        spend,
     })
 }
 
@@ -253,4 +316,148 @@ pub fn http_client() -> Result<reqwest::Client> {
         .timeout(Duration::from_secs(30))
         .build()
         .context("build reqwest client")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn real_response_spend_maps_to_dollars() {
+        // Live /api/oauth/usage payload (trimmed to the relevant fields).
+        let json = r#"{
+            "five_hour": { "utilization": 100.0, "resets_at": "2026-07-02T11:40:00+00:00" },
+            "seven_day": { "utilization": 14.0, "resets_at": "2026-07-07T22:00:00+00:00" },
+            "spend": {
+                "used":  { "amount_minor": 3877, "currency": "USD", "exponent": 2 },
+                "limit": { "amount_minor": 8000, "currency": "USD", "exponent": 2 },
+                "percent": 48, "enabled": true
+            }
+        }"#;
+        let usage: UsageResponse = serde_json::from_str(json).expect("parse");
+        let spend = map_spend(&usage.spend.expect("spend present")).expect("mapped");
+        assert!(approx(spend.used, 38.77), "used = {}", spend.used);
+        assert_eq!(spend.limit, Some(80.00));
+        assert!(approx(spend.percent, 48.0));
+        assert_eq!(spend.currency, "USD");
+        assert!(spend.enabled);
+    }
+
+    #[test]
+    fn money_major_decodes_exponent() {
+        let m = MoneyPayload {
+            amount_minor: Some(3877),
+            exponent: Some(2),
+            currency: None,
+        };
+        assert!(approx(money_major(&m).unwrap(), 38.77));
+
+        // exponent 0 => integer value
+        let whole = MoneyPayload {
+            amount_minor: Some(80),
+            exponent: Some(0),
+            currency: None,
+        };
+        assert!(approx(money_major(&whole).unwrap(), 80.0));
+
+        // missing exponent defaults to 2
+        let default_exp = MoneyPayload {
+            amount_minor: Some(3877),
+            exponent: None,
+            currency: None,
+        };
+        assert!(approx(money_major(&default_exp).unwrap(), 38.77));
+
+        // missing amount => None
+        let empty = MoneyPayload {
+            amount_minor: None,
+            exponent: Some(2),
+            currency: None,
+        };
+        assert!(money_major(&empty).is_none());
+    }
+
+    #[test]
+    fn percent_falls_back_to_ratio() {
+        let payload = SpendPayload {
+            used: Some(MoneyPayload {
+                amount_minor: Some(2000),
+                exponent: Some(2),
+                currency: Some("USD".to_owned()),
+            }),
+            limit: Some(MoneyPayload {
+                amount_minor: Some(8000),
+                exponent: Some(2),
+                currency: Some("USD".to_owned()),
+            }),
+            percent: None,
+            enabled: true,
+        };
+        let spend = map_spend(&payload).expect("mapped");
+        assert!(approx(spend.percent, 25.0), "percent = {}", spend.percent);
+    }
+
+    #[test]
+    fn percent_no_divide_by_zero_without_limit() {
+        let payload = SpendPayload {
+            used: Some(MoneyPayload {
+                amount_minor: Some(2000),
+                exponent: Some(2),
+                currency: None,
+            }),
+            limit: None,
+            percent: None,
+            enabled: true,
+        };
+        let spend = map_spend(&payload).expect("mapped");
+        assert_eq!(spend.limit, None);
+        assert!(approx(spend.percent, 0.0));
+        assert_eq!(spend.currency, "USD"); // defaulted
+    }
+
+    #[test]
+    fn spend_without_used_maps_to_none() {
+        let payload = SpendPayload {
+            used: None,
+            limit: Some(MoneyPayload {
+                amount_minor: Some(8000),
+                exponent: Some(2),
+                currency: None,
+            }),
+            percent: Some(0.0),
+            enabled: true,
+        };
+        assert!(map_spend(&payload).is_none());
+    }
+
+    #[test]
+    fn disabled_spend_still_maps() {
+        let payload = SpendPayload {
+            used: Some(MoneyPayload {
+                amount_minor: Some(0),
+                exponent: Some(2),
+                currency: Some("USD".to_owned()),
+            }),
+            limit: None,
+            percent: Some(0.0),
+            enabled: false,
+        };
+        let spend = map_spend(&payload).expect("mapped");
+        assert!(!spend.enabled); // UI hides it, but the mapping succeeds
+    }
+
+    #[test]
+    fn response_without_spend_still_parses() {
+        // Regression guard: accounts without extra usage omit `spend` entirely.
+        let json = r#"{
+            "five_hour": { "utilization": 12.0, "resets_at": "2026-07-02T11:40:00+00:00" },
+            "seven_day": { "utilization": 3.0, "resets_at": "2026-07-07T22:00:00+00:00" }
+        }"#;
+        let usage: UsageResponse = serde_json::from_str(json).expect("parse");
+        assert!(usage.spend.is_none());
+    }
 }
