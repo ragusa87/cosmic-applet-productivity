@@ -200,9 +200,9 @@ fn money_major(m: &MoneyPayload) -> Option<f64> {
     Some(amount as f64 / 10f64.powi(exponent))
 }
 
-/// Map the raw spend payload into the display model. Returns `None` when there
-/// is no `used` amount to show; otherwise carries `enabled` through so the UI
-/// decides visibility.
+// Map the raw spend payload into the display model. Returns `None` when there
+// is no `used` amount to show; otherwise carries `enabled` through so the UI
+// decides visibility.
 fn map_spend(payload: &SpendPayload) -> Option<SpendInfo> {
     let used_money = payload.used.as_ref()?;
     let used = money_major(used_money)?;
