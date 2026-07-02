@@ -38,6 +38,7 @@ struct Form {
     taxi_command: String,
     taxirc_path: String,
     enable_autopause: bool,
+    show_seconds: bool,
 }
 
 impl Form {
@@ -49,6 +50,7 @@ impl Form {
             taxi_command: c.taxi_command.clone(),
             taxirc_path: c.taxirc_path.clone(),
             enable_autopause: c.enable_autopause,
+            show_seconds: c.show_seconds,
         }
     }
 }
@@ -61,6 +63,7 @@ pub enum Msg {
     FormTaxiCommand(String),
     FormTaxircPath(String),
     FormEnableAutopause(bool),
+    FormShowSeconds(bool),
     Save,
     Saved,
     RefreshAliases,
@@ -159,6 +162,23 @@ impl cosmic::Application for SettingsApp {
                  individually in its edit form.",
             ));
 
+        let show_seconds = Column::new()
+            .spacing(2)
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(cosmic::iced::Alignment::Center)
+                    .push(
+                        cosmic::widget::toggler(self.form.show_seconds)
+                            .on_toggle(Msg::FormShowSeconds),
+                    )
+                    .push(text::body("Show seconds in the panel timer")),
+            )
+            .push(text::caption(
+                "When on, the running timer in the panel shows HH:MM:SS; \
+                 otherwise just HH:MM.",
+            ));
+
         let mut diag = Column::new().spacing(2);
         match self.taxi.as_ref() {
             Some(r) if r.available => {
@@ -207,6 +227,7 @@ impl cosmic::Application for SettingsApp {
             .push(cmd)
             .push(taxirc)
             .push(autopause)
+            .push(show_seconds)
             .push(actions)
             .push(diag);
 
@@ -224,6 +245,7 @@ impl cosmic::Application for SettingsApp {
             Msg::FormTaxiCommand(s) => self.form.taxi_command = s,
             Msg::FormTaxircPath(s) => self.form.taxirc_path = s,
             Msg::FormEnableAutopause(v) => self.form.enable_autopause = v,
+            Msg::FormShowSeconds(v) => self.form.show_seconds = v,
 
             Msg::Save => {
                 if let Err(e) = self.save() {
@@ -310,6 +332,7 @@ impl SettingsApp {
             taxi_command: cmd,
             taxirc_path: self.form.taxirc_path.trim().to_owned(),
             enable_autopause: self.form.enable_autopause,
+            show_seconds: self.form.show_seconds,
         };
         let ctx = cosmic_config::Config::new(APP_ID, Config::VERSION)
             .map_err(|e| anyhow::anyhow!("cosmic-config: {e}"))?;

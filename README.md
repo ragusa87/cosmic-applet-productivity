@@ -328,6 +328,7 @@ template (`[taxi].file`, default `~/zebra/%Y/%m.tks`), date format
 | `taxi_command`        | `uv run --with taxi,taxi-zebra taxi`        | Whitespace-split, args appended.               |
 | `taxirc_path`         | `""`                                        | Blank → resolve `~/.config/taxi/taxirc`.       |
 | `enable_autopause`    | `true`                                      | Master switch for pause-on-lock. Off → no pause/AFK; per-timer toggle hidden. |
+| `show_seconds`        | `true`                                      | Show `HH:MM:SS` for the running timer in the panel. Off → `HH:MM`. |
 
 Each timer also has a per-timer **Auto-pause on lock screen** toggle (in
 its edit form, default on) so individual activities can keep counting

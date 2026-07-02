@@ -629,8 +629,10 @@ impl cosmic::Application for AppModel {
 impl AppModel {
     /// Text shown next to the panel icon. Minimised to keep the panel from
     /// reflowing every tick on big screens — only the running timer's alias
-    /// and today's accumulated duration (`HH:MM`, so the width changes at
-    /// most once a minute). Idle / vertical panels show the icon alone.
+    /// and today's accumulated duration. By default the seconds are shown
+    /// (`HH:MM:SS`); with `show_seconds` off it collapses to `HH:MM`, whose
+    /// width changes at most once a minute. Idle / vertical panels show the
+    /// icon alone.
     fn panel_label_text(&self, is_horizontal: bool) -> Option<String> {
         if !is_horizontal {
             return None;
@@ -639,7 +641,12 @@ impl AppModel {
         let now = Local::now();
         let day = state::cutover_date(now, self.config.cutover_hour());
         let elapsed = state::sum_for_date(t, day, self.config.cutover_hour(), now);
-        Some(format!("{} {}", t.alias, fmt_duration_hms_short(elapsed)))
+        let duration = if self.config.show_seconds {
+            fmt_duration_hms(elapsed)
+        } else {
+            fmt_duration_hms_short(elapsed)
+        };
+        Some(format!("{} {}", t.alias, duration))
     }
 
     fn persist(&self) {
@@ -1269,5 +1276,12 @@ mod tests {
 
         assert!(!path.exists());
         assert_eq!(state.timers[0].sessions.len(), 1);
+    }
+
+    #[test]
+    fn duration_formatters_differ_only_in_seconds() {
+        let d = Duration::seconds(3 * 3600 + 7 * 60 + 9);
+        assert_eq!(fmt_duration_hms(d), "03:07:09");
+        assert_eq!(fmt_duration_hms_short(d), "03:07");
     }
 }

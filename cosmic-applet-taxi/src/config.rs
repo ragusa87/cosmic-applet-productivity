@@ -4,7 +4,7 @@ use cosmic_config_derive::CosmicConfigEntry;
 pub const APP_ID: &str = "com.github.ragusa87.CosmicAppletTaxi";
 
 #[derive(Debug, Clone, CosmicConfigEntry, Eq, PartialEq)]
-#[version = 2]
+#[version = 3]
 pub struct Config {
     pub cutover_hour: u8,
     pub merge_gap_minutes: u32,
@@ -14,6 +14,9 @@ pub struct Config {
     /// Master switch for pausing timers on screen lock / suspend. When off,
     /// lock/unlock does nothing and the per-timer opt-out is hidden.
     pub enable_autopause: bool,
+    /// Show seconds (`HH:MM:SS`) instead of just `HH:MM` in the panel label of
+    /// the running timer.
+    pub show_seconds: bool,
 }
 
 impl Default for Config {
@@ -25,6 +28,7 @@ impl Default for Config {
             taxi_command: "uv run --with taxi,taxi-zebra taxi".to_owned(),
             taxirc_path: String::new(),
             enable_autopause: true,
+            show_seconds: true,
         }
     }
 }
