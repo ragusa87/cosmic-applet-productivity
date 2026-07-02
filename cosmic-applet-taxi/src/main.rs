@@ -37,7 +37,13 @@ fn main() -> cosmic::iced::Result {
 fn run_lock_debug() {
     use futures_util::StreamExt;
 
-    let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("failed to build tokio runtime: {e}");
+            return;
+        }
+    };
     rt.block_on(async {
         let mut stream = std::pin::pin!(lock::stream());
         eprintln!("watching for lock/unlock/suspend — Ctrl-C to quit");

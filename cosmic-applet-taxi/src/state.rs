@@ -91,7 +91,10 @@ pub struct AppState {
     pub schema_version: u32,
     /// Timestamp of the most recent screen-lock / suspend, so the away
     /// duration can be recorded as an AFK session on unlock. `None` when not
-    /// locked. Persisted so it survives an applet restart mid-lock.
+    /// locked. Persisted so a lock is still recorded if the applet exits mid-
+    /// lock; on the next startup [`resume_unlocked`](Self::resume_unlocked)
+    /// closes it out rather than waiting for an unlock event that may never
+    /// arrive.
     #[serde(default)]
     pub locked_at: Option<DateTime<Local>>,
 }
@@ -255,6 +258,59 @@ impl AppState {
     /// unlock to compute the away duration).
     pub fn take_locked_at(&mut self) -> Option<DateTime<Local>> {
         self.locked_at.take()
+    }
+
+    /// Discard any pending lock bookkeeping (stored lock timestamp and
+    /// paused-by-lock markers) without recording AFK or notifying. Used when
+    /// the auto-pause master switch is off at unlock time, to drop state left
+    /// over from before it was disabled. Returns `true` if anything was
+    /// cleared (i.e. a persist is warranted).
+    pub fn clear_lock_bookkeeping(&mut self) -> bool {
+        let was_locked = self.take_locked_at().is_some();
+        let had_labels = !self.take_lock_paused_labels().is_empty();
+        was_locked || had_labels
+    }
+
+    /// Arm the lock timestamp for a lock happening at `now`.
+    ///
+    /// If a previous lock is still open (its unlock was never observed — e.g.
+    /// the unlock marker was missed or the applet restarted mid-lock), close
+    /// that stale away period as its own AFK session first. Without this, the
+    /// old `locked_at` would linger and the next observed unlock would record
+    /// one giant AFK span reaching all the way back to it.
+    pub fn begin_lock(&mut self, now: DateTime<Local>) {
+        if let Some(prev) = self.take_locked_at() {
+            self.record_afk(prev, now);
+        }
+        self.locked_at = Some(now);
+    }
+
+    /// Resolve a lock left pending across an applet restart.
+    ///
+    /// The panel process is running again, so the session is unlocked and
+    /// active — any lock that was armed when we last exited has effectively
+    /// ended. We resolve it here the same way an observed unlock would, rather
+    /// than leaving `locked_at` armed for an `Unlocked` event that may never
+    /// arrive (the journal follower only starts on a fresh lock edge, so an
+    /// unlock during downtime is missed and the stale span would otherwise
+    /// balloon to the next observed unlock).
+    ///
+    /// With auto-pause enabled the pending away period is recorded as AFK up to
+    /// `now`; otherwise the stale bookkeeping is simply dropped (mirroring the
+    /// unlock handler's master-switch gate). Returns `true` if anything
+    /// changed, so the caller can persist.
+    pub fn resume_unlocked(&mut self, now: DateTime<Local>, autopause_enabled: bool) -> bool {
+        if !autopause_enabled {
+            return self.clear_lock_bookkeeping();
+        }
+        match self.take_locked_at() {
+            Some(from) => {
+                self.record_afk(from, now);
+                self.take_lock_paused_labels();
+                true
+            }
+            None => false,
+        }
     }
 
     /// Record an away period (`from`..`to`) as a closed session on the reserved
@@ -449,6 +505,73 @@ mod tests {
     }
 
     #[test]
+    fn begin_lock_arms_timestamp_without_afk_when_no_prior_lock() {
+        let mut s = AppState::default();
+        s.begin_lock(at(9, 0));
+        assert_eq!(s.locked_at, Some(at(9, 0)));
+        assert!(
+            s.find_by_alias(AFK_ALIAS).is_none(),
+            "a fresh lock records no AFK"
+        );
+    }
+
+    #[test]
+    fn begin_lock_closes_stale_prior_lock_as_afk() {
+        let mut s = AppState::default();
+        // First lock at 12:00; its unlock is never observed.
+        s.begin_lock(at(12, 0));
+        assert!(s.find_by_alias(AFK_ALIAS).is_none());
+
+        // Locking again at 14:40 with 12:00 still armed: the stale span is
+        // closed out as AFK and the new lock takes over.
+        s.begin_lock(at(14, 40));
+        let afk = s.find_by_alias(AFK_ALIAS).expect("stale lock recorded");
+        assert_eq!(afk.sessions.len(), 1);
+        assert_eq!(afk.sessions[0].start, at(12, 0));
+        assert_eq!(afk.sessions[0].end.unwrap(), at(14, 40));
+        assert_eq!(
+            s.locked_at,
+            Some(at(14, 40)),
+            "new lock timestamp is armed for the pending unlock"
+        );
+    }
+
+    #[test]
+    fn resume_unlocked_records_pending_lock_as_afk_on_restart() {
+        let mut s = AppState::default();
+        s.begin_lock(at(12, 0));
+        // Applet restarts and comes back at 12:20 → treat as unlocked now.
+        let changed = s.resume_unlocked(at(12, 20), true);
+        assert!(changed, "resolving a pending lock is a change worth saving");
+        assert_eq!(s.locked_at, None, "lock is cleared once resumed");
+        let afk = s.find_by_alias(AFK_ALIAS).expect("pending lock recorded");
+        assert_eq!(afk.sessions[0].start, at(12, 0));
+        assert_eq!(afk.sessions[0].end.unwrap(), at(12, 20));
+    }
+
+    #[test]
+    fn resume_unlocked_noop_when_no_pending_lock() {
+        let mut s = AppState::default();
+        assert!(!s.resume_unlocked(at(12, 20), true));
+        assert!(s.find_by_alias(AFK_ALIAS).is_none());
+    }
+
+    #[test]
+    fn resume_unlocked_drops_lock_without_afk_when_autopause_off() {
+        let mut s = AppState {
+            locked_at: Some(at(12, 0)),
+            ..AppState::default()
+        };
+        let changed = s.resume_unlocked(at(12, 20), false);
+        assert!(changed, "stale bookkeeping was cleared");
+        assert_eq!(s.locked_at, None);
+        assert!(
+            s.find_by_alias(AFK_ALIAS).is_none(),
+            "master switch off records no AFK, mirroring the unlock handler"
+        );
+    }
+
+    #[test]
     fn record_afk_ignores_non_positive_span() {
         let mut s = AppState::default();
         s.record_afk(at(9, 30), at(9, 30)); // zero
@@ -463,6 +586,32 @@ mod tests {
         s.locked_at = Some(at(9, 0));
         assert_eq!(s.take_locked_at(), Some(at(9, 0)));
         assert!(s.take_locked_at().is_none());
+    }
+
+    #[test]
+    fn clear_lock_bookkeeping_drops_state_without_afk_and_reports() {
+        let mut s = AppState::default();
+        // Nothing pending → no-op, reports false.
+        assert!(!s.clear_lock_bookkeeping());
+
+        // Simulate a lock that paused a running timer.
+        let a = s.add_timer("_a".into(), String::new()).unwrap();
+        s.start_timer(a, at(9, 0));
+        s.locked_at = Some(at(9, 0));
+        s.auto_pause_all(at(9, 30));
+
+        assert!(
+            s.clear_lock_bookkeeping(),
+            "should report state was cleared"
+        );
+        // Timestamp and paused-by-lock marker are gone...
+        assert!(s.take_locked_at().is_none());
+        assert!(s.take_lock_paused_labels().is_empty());
+        // ...no AFK entry was recorded, and the timer stays paused (not resumed).
+        assert!(s.timers.iter().all(|t| t.alias != AFK_ALIAS));
+        assert!(!s.timers[0].is_running());
+        // A second call finds nothing to clear.
+        assert!(!s.clear_lock_bookkeeping());
     }
 
     #[test]
