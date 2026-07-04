@@ -14,6 +14,9 @@ pub struct Config {
     pub alert_enabled: bool,
     /// Percentage (0–100) at or above which the alert fires.
     pub alert_threshold_pct: u8,
+    /// Hide the pay-as-you-go credit row while the plan still has headroom.
+    /// The row reappears once the daily or weekly window reaches 100%.
+    pub ignore_credits_when_plan_used: bool,
 }
 
 impl Default for Config {
@@ -21,6 +24,7 @@ impl Default for Config {
         Self {
             alert_enabled: true,
             alert_threshold_pct: 90,
+            ignore_credits_when_plan_used: false,
         }
     }
 }

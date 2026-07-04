@@ -24,6 +24,7 @@ pub fn dashboard_view<'a>(
     errors: &'a [RefreshError],
     refreshing: bool,
     last_refresh: Option<DateTime<Utc>>,
+    ignore_credits_when_plan_used: bool,
 ) -> Element<'a, Message> {
     let header = Row::new()
         .align_y(Alignment::Center)
@@ -46,7 +47,7 @@ pub fn dashboard_view<'a>(
         }));
     } else {
         for snapshot in snapshots {
-            col = col.push(provider_card(snapshot));
+            col = col.push(provider_card(snapshot, ignore_credits_when_plan_used));
         }
         for err in errors {
             col = col.push(warning_banner(err));
@@ -57,7 +58,10 @@ pub fn dashboard_view<'a>(
     col.into()
 }
 
-fn provider_card(snapshot: &ProviderSnapshot) -> Element<'_, Message> {
+fn provider_card(
+    snapshot: &ProviderSnapshot,
+    ignore_credits_when_plan_used: bool,
+) -> Element<'_, Message> {
     let now = chrono::Utc::now();
 
     let header = Row::new()
@@ -69,12 +73,15 @@ fn provider_card(snapshot: &ProviderSnapshot) -> Element<'_, Message> {
                 .width(Length::Fill)
                 .height(Length::Fixed(0.0)),
         )
-        .push(text::body(worst_badge(snapshot)).font(cosmic::font::bold()));
+        .push(
+            text::body(worst_badge(snapshot, ignore_credits_when_plan_used))
+                .font(cosmic::font::bold()),
+        );
 
     let mut col = Column::new().padding(10).spacing(8).push(header);
     col = col.push(bar_row("DAILY", snapshot.short.as_ref(), now));
     col = col.push(bar_row("WEEKLY", snapshot.weekly.as_ref(), now));
-    if let Some(spend) = snapshot.spend.as_ref().filter(|s| s.enabled) {
+    if let Some(spend) = snapshot.visible_spend(ignore_credits_when_plan_used) {
         col = col.push(spend_row(spend));
     }
 
@@ -119,9 +126,9 @@ fn spend_row(spend: &SpendInfo) -> Element<'_, Message> {
         .into()
 }
 
-fn worst_badge(snapshot: &ProviderSnapshot) -> String {
+fn worst_badge(snapshot: &ProviderSnapshot, ignore_credits_when_plan_used: bool) -> String {
     snapshot
-        .worst_used()
+        .worst_used(ignore_credits_when_plan_used)
         .map_or_else(|| "—".to_owned(), |w| format!("{}%", round_pct(w)))
 }
 
