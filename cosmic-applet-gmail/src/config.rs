@@ -16,8 +16,6 @@ pub struct Config {
     pub poll_interval_secs: u32,
     /// Fire a desktop notification when the unread count rises.
     pub notify: bool,
-    /// Manual pause: no polling, no notifications, icon greyed out.
-    pub paused: bool,
     /// Automatically pause on Saturday/Sunday.
     pub auto_pause_weekend: bool,
 }
@@ -29,7 +27,6 @@ impl Default for Config {
             client_id: String::new(),
             poll_interval_secs: 60,
             notify: true,
-            paused: false,
             auto_pause_weekend: false,
         }
     }
@@ -42,18 +39,5 @@ impl Config {
 
     pub fn is_configured(&self) -> bool {
         !self.email.is_empty() && !self.client_id.is_empty()
-    }
-
-    /// Effective pause state: the manual `paused` flag, or the weekend
-    /// auto-pause when today is Saturday/Sunday. When paused the applet skips
-    /// polling and notifications and greys its icon.
-    pub fn is_paused(&self) -> bool {
-        use chrono::Datelike;
-        self.paused
-            || (self.auto_pause_weekend
-                && matches!(
-                    chrono::Local::now().weekday(),
-                    chrono::Weekday::Sat | chrono::Weekday::Sun
-                ))
     }
 }

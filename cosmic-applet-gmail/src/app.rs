@@ -27,6 +27,32 @@ pub struct AppModel {
     pub unread: Option<u64>,
     pub stale: bool,
     pub tokens: Option<Tokens>,
+    /// Manual pause takeover. `None` follows the weekend auto-pause rule;
+    /// `Some(true)`/`Some(false)` is an explicit user choice that overrides it
+    /// (so "Resume" works even on a weekend, and "Pause" works midweek).
+    pub paused_override: Option<bool>,
+}
+
+impl AppModel {
+    /// The weekend auto-pause rule, ignoring any manual override.
+    fn auto_paused(&self) -> bool {
+        self.config.auto_pause_weekend && is_weekend_local()
+    }
+
+    /// Effective pause state: the manual override, or the weekend auto-pause
+    /// rule when no override is pinned. When paused the applet skips polling
+    /// and notifications and greys its icon.
+    pub fn is_paused(&self) -> bool {
+        self.paused_override.unwrap_or_else(|| self.auto_paused())
+    }
+
+    /// Drop a manual override once it agrees with the current auto-pause rule,
+    /// so the applet returns to the configured behavior instead of pinning a
+    /// stale choice forever (e.g. a weekend "Resume" leaking into every future
+    /// weekend, or a midweek "Pause" never lifting on Monday).
+    fn reconcile_pause_override(&mut self) {
+        self.paused_override = reconciled_override(self.paused_override, self.auto_paused());
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -107,7 +133,7 @@ impl cosmic::Application for AppModel {
         let (pad_major, pad_minor) = self.core.applet.suggested_padding(true);
         let icon_px = f32::from(icon_size);
 
-        let paused = self.config.is_paused();
+        let paused = self.is_paused();
 
         // Grey the icon (render it symbolic/monochrome) while paused.
         let icon = cosmic::widget::icon(
@@ -273,8 +299,11 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Tick => {
-                // Skip all polling (hence the count check) while paused.
-                if self.config.is_paused() {
+                // Lift a stale override that the weekend rule has caught up with
+                // (e.g. a manual pause set before the weekend, now Monday).
+                self.reconcile_pause_override();
+                // Skip all polling while paused.
+                if self.is_paused() {
                     return Task::none();
                 }
                 let Some(tokens) = self.tokens.clone() else {
@@ -344,11 +373,15 @@ impl cosmic::Application for AppModel {
                     .menu_popup
                     .take()
                     .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
-                self.config.paused = !self.config.paused;
-                persist_config(&self.config);
+                // Flip the *effective* state and pin it as a manual override, so
+                // the toggle takes over from the weekend rule in either direction.
+                self.paused_override = Some(!self.is_paused());
+                // If the user toggled back to whatever the weekend rule already
+                // wants, drop the override so we don't pin a stale choice.
+                self.reconcile_pause_override();
                 // If we just resumed (and no weekend auto-pause applies), fetch
                 // right away rather than waiting for the next poll.
-                let resume = if self.config.is_paused() {
+                let resume = if self.is_paused() {
                     Task::none()
                 } else {
                     cosmic::task::message(cosmic::Action::App(Message::Tick))
@@ -430,19 +463,11 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
             settings
         },
         Some(Box::new(|state: &AppModel| {
-            let body = ui::menu_view(state.config.paused, state.config.is_paused());
+            let body = ui::menu_view(state.is_paused());
             Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
         })),
     );
     dispatch_surface(action)
-}
-
-fn persist_config(config: &Config) {
-    if let Ok(ctx) = cosmic_config::Config::new(APP_ID, Config::VERSION)
-        && let Err(why) = config.write_entry(&ctx)
-    {
-        tracing::warn!(?why, "failed writing config entry");
-    }
 }
 
 async fn refresh_and_fetch(
@@ -461,4 +486,52 @@ async fn refresh_and_fetch(
     };
     let count = gmail::unread_count(&tokens.access_token).await?;
     Ok((tokens, count))
+}
+
+/// Reconcile a manual pause override against the weekend auto-pause rule. Drop
+/// the override once it agrees with what the rule would decide on its own;
+/// otherwise keep the explicit user choice.
+fn reconciled_override(override_: Option<bool>, auto_paused: bool) -> Option<bool> {
+    match override_ {
+        Some(v) if v == auto_paused => None,
+        other => other,
+    }
+}
+
+fn is_weekend_local() -> bool {
+    use chrono::Datelike;
+    matches!(
+        chrono::Local::now().weekday(),
+        chrono::Weekday::Sat | chrono::Weekday::Sun
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reconciled_override;
+
+    #[test]
+    fn reconcile_keeps_override_that_fights_auto_rule() {
+        // Weekend auto-pause is on; user hits "Resume" -> Some(false) while the
+        // rule wants paused. The explicit choice must survive the weekend.
+        assert_eq!(reconciled_override(Some(false), true), Some(false));
+        // Midweek manual pause -> Some(true) while the rule wants running.
+        assert_eq!(reconciled_override(Some(true), false), Some(true));
+    }
+
+    #[test]
+    fn reconcile_drops_override_that_agrees_with_auto_rule() {
+        // Weekend ends: the "Resume" override now matches the rule, so drop it
+        // and let future weekends auto-pause again.
+        assert_eq!(reconciled_override(Some(false), false), None);
+        // Weekend starts while a manual pause is active: the rule already wants
+        // paused, so the override becomes redundant.
+        assert_eq!(reconciled_override(Some(true), true), None);
+    }
+
+    #[test]
+    fn reconcile_leaves_unset_override_untouched() {
+        assert_eq!(reconciled_override(None, true), None);
+        assert_eq!(reconciled_override(None, false), None);
+    }
 }
