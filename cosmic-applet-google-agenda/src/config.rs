@@ -21,6 +21,7 @@ pub struct Config {
     pub show_title: bool,
     pub show_time: bool,
     pub show_progress: bool,
+    pub disable_during_weekend: bool,
 }
 
 impl Default for Config {
@@ -35,6 +36,7 @@ impl Default for Config {
             show_title: true,
             show_time: true,
             show_progress: true,
+            disable_during_weekend: false,
         }
     }
 }

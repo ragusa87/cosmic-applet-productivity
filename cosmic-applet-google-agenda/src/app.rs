@@ -34,6 +34,66 @@ pub struct AppModel {
     pub idle_since: Option<DateTime<Utc>>,
     pub notified: HashSet<String>,
     pub stale: bool,
+    /// Manual pause takeover. `None` follows the weekend auto-pause rule;
+    /// `Some(true)`/`Some(false)` is an explicit user choice that overrides it
+    /// (so "Resume" works even on a weekend, and "Pause" works midweek).
+    pub paused_override: Option<bool>,
+    /// Effective pause state seen by the previous `Tick`/`TogglePause`. Needed
+    /// to detect the paused -> running edge: the fetch subscription is only
+    /// recreated at that point and won't fire for a full `fetch_interval`, so
+    /// the edge triggers an immediate refetch.
+    pub last_paused: bool,
+}
+
+impl AppModel {
+    /// The weekend auto-pause rule, ignoring any manual override.
+    fn auto_paused(&self) -> bool {
+        self.config.disable_during_weekend && is_weekend_local()
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused_override.unwrap_or_else(|| self.auto_paused())
+    }
+
+    /// Drop a manual override once it agrees with the current auto-pause rule,
+    /// so the applet returns to the configured behavior instead of pinning a
+    /// stale choice forever (e.g. a weekend "Resume" leaking into every future
+    /// weekend, or the "Pause on weekends" setting appearing ineffective).
+    fn reconcile_pause_override(&mut self) {
+        self.paused_override = reconciled_override(self.paused_override, self.auto_paused());
+    }
+
+    fn wedge_badge_canvas(&self, now: DateTime<Utc>, dot_size: f32) -> Element<'_, Message> {
+        use cosmic::iced::{Color, Length};
+        let busy = self
+            .next
+            .as_ref()
+            .is_some_and(|ev| ev.start <= now && ev.end >= now);
+        let badge_color = if busy {
+            Color::from_rgb(0.91, 0.30, 0.24)
+        } else {
+            Color::from_rgb(0.30, 0.69, 0.31)
+        };
+        let remaining = if self.config.show_progress {
+            self.next.as_ref().map_or(1.0, |ev| {
+                if busy {
+                    1.0 - meeting_progress(now, ev)
+                } else {
+                    let window_start = idle_window_start(self.idle_since, ev.start);
+                    1.0 - free_progress(now, window_start, ev.start)
+                }
+            })
+        } else {
+            1.0
+        };
+        cosmic::iced::widget::canvas(WedgeBadge {
+            color: badge_color,
+            remaining,
+        })
+        .width(Length::Fixed(dot_size))
+        .height(Length::Fixed(dot_size))
+        .into()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +108,7 @@ pub enum Message {
     Refetch,
     RefreshFromMenu,
     Fetched(Result<(Tokens, Vec<Event>), String>),
+    TogglePause,
 
     UpdateConfig(Config),
     TokensLoaded(Option<Tokens>),
@@ -78,11 +139,15 @@ impl cosmic::Application for AppModel {
             })
             .unwrap_or_default();
 
-        let app = AppModel {
+        let mut app = AppModel {
             core,
             config: config.clone(),
             ..Default::default()
         };
+        // Seed the edge detector with the real state, so a "Resume" click
+        // before the first Tick (e.g. right after a weekend startup) still
+        // counts as a paused -> running transition and refetches.
+        app.last_paused = app.is_paused();
 
         let task = if config.is_configured() {
             let email = config.email.clone();
@@ -103,8 +168,8 @@ impl cosmic::Application for AppModel {
 
     fn view(&self) -> Element<'_, Self::Message> {
         use cosmic::applet::cosmic_panel_config::PanelAnchor;
+        use cosmic::iced::Length;
         use cosmic::iced::widget::Row;
-        use cosmic::iced::{Color, Length};
 
         let is_horizontal = matches!(
             self.core.applet.anchor,
@@ -116,42 +181,14 @@ impl cosmic::Application for AppModel {
         let icon_px = f32::from(icon_size);
         let label_size = (icon_px * 0.55).round();
         let dot_size = (icon_px * 0.6).round();
+        let paused = self.is_paused();
 
-        let icon = cosmic::widget::icon(cosmic::widget::icon::from_svg_bytes(
-            CALENDAR_ICON_SVG.to_vec(),
-        ))
+        let icon = cosmic::widget::icon(
+            cosmic::widget::icon::from_svg_bytes(CALENDAR_ICON_SVG.to_vec()).symbolic(paused),
+        )
         .size(icon_size);
 
         let now = Utc::now();
-        let busy = self
-            .next
-            .as_ref()
-            .is_some_and(|ev| ev.start <= now && ev.end >= now);
-        let badge_color = if busy {
-            Color::from_rgb(0.91, 0.30, 0.24)
-        } else {
-            Color::from_rgb(0.30, 0.69, 0.31)
-        };
-
-        let remaining = if self.config.show_progress {
-            self.next.as_ref().map_or(1.0, |ev| {
-                if busy {
-                    1.0 - meeting_progress(now, ev)
-                } else {
-                    let window_start = idle_window_start(self.idle_since, ev.start);
-                    1.0 - free_progress(now, window_start, ev.start)
-                }
-            })
-        } else {
-            1.0
-        };
-        let dot = cosmic::iced::widget::canvas(WedgeBadge {
-            color: badge_color,
-            remaining,
-        })
-        .width(Length::Fixed(dot_size))
-        .height(Length::Fixed(dot_size));
-
         let extra = (dot_size / 2.0).round();
         let stack_px = icon_px + extra;
 
@@ -161,30 +198,27 @@ impl cosmic::Application for AppModel {
             .align_x(cosmic::iced::alignment::Horizontal::Left)
             .align_y(cosmic::iced::alignment::Vertical::Top);
 
-        let badge = cosmic::widget::container(dot)
+        let mut icon_with_badge = cosmic::iced::widget::Stack::new()
             .width(Length::Fixed(stack_px))
             .height(Length::Fixed(stack_px))
-            .align_x(cosmic::iced::alignment::Horizontal::Right)
-            .align_y(cosmic::iced::alignment::Vertical::Bottom);
+            .push(icon_area);
+        if !paused {
+            let badge = cosmic::widget::container(self.wedge_badge_canvas(now, dot_size))
+                .width(Length::Fixed(stack_px))
+                .height(Length::Fixed(stack_px))
+                .align_x(cosmic::iced::alignment::Horizontal::Right)
+                .align_y(cosmic::iced::alignment::Vertical::Bottom);
+            icon_with_badge = icon_with_badge.push(badge);
+        }
 
-        let icon_with_badge = cosmic::iced::widget::Stack::new()
-            .width(Length::Fixed(stack_px))
-            .height(Length::Fixed(stack_px))
-            .push(icon_area)
-            .push(badge);
-
-        let time_text = self
-            .config
-            .show_time
+        let time_text = (!paused && self.config.show_time)
             .then(|| {
                 self.next
                     .as_ref()
                     .map(|ev| label_widget(format_relative(now, ev.start), label_size, true))
             })
             .flatten();
-        let title_widget = self
-            .config
-            .show_title
+        let title_widget = (!paused && self.config.show_title)
             .then(|| {
                 self.next
                     .as_ref()
@@ -228,8 +262,11 @@ impl cosmic::Application for AppModel {
 
     fn subscription(&self) -> Subscription<Self::Message> {
         let display = cosmic::iced::time::every(self.config.display_tick()).map(|_| Message::Tick);
-        let fetch =
-            cosmic::iced::time::every(self.config.fetch_interval()).map(|_| Message::Refetch);
+        let fetch = if self.is_paused() {
+            Subscription::none()
+        } else {
+            cosmic::iced::time::every(self.config.fetch_interval()).map(|_| Message::Refetch)
+        };
         let watch = self
             .core()
             .watch_config::<Config>(Self::APP_ID)
@@ -320,6 +357,12 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Tick => {
+                self.reconcile_pause_override();
+                let paused = self.is_paused();
+                let resumed = just_resumed(&mut self.last_paused, paused);
+                if paused {
+                    return Task::none();
+                }
                 let now = Utc::now();
                 recompute_next(&mut self.events, &mut self.next, &mut self.idle_since, now);
                 prune_notified(&self.events, &mut self.notified);
@@ -329,6 +372,12 @@ impl cosmic::Application for AppModel {
                     0
                 };
                 maybe_notify(self.next.as_ref(), &mut self.notified, lead, now);
+                if resumed {
+                    // The pause just ended (weekend rollover, or the setting was
+                    // switched off): pull fresh events immediately instead of
+                    // showing stale ones until the recreated subscription fires.
+                    return cosmic::task::message(cosmic::Action::App(Message::Refetch));
+                }
             }
 
             Message::RefreshFromMenu => {
@@ -340,7 +389,30 @@ impl cosmic::Application for AppModel {
                 return Task::batch([destroy_menu, refresh]);
             }
 
+            Message::TogglePause => {
+                // Flip the *effective* state and pin it as a manual override, so
+                // the toggle takes over from the weekend rule in either direction.
+                self.paused_override = Some(!self.is_paused());
+                // If the user toggled back to whatever the weekend rule already
+                // wants, drop the override so we don't pin a stale choice.
+                self.reconcile_pause_override();
+                let destroy_menu = self
+                    .menu_popup
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
+                let paused = self.is_paused();
+                let resume_fetch = if just_resumed(&mut self.last_paused, paused) {
+                    cosmic::task::message(cosmic::Action::App(Message::Refetch))
+                } else {
+                    Task::none()
+                };
+                return Task::batch([destroy_menu, resume_fetch]);
+            }
+
             Message::Refetch => {
+                if self.is_paused() {
+                    return Task::none();
+                }
                 let Some(tokens) = self.tokens.clone() else {
                     return Task::none();
                 };
@@ -446,7 +518,7 @@ fn open_menu_popup(new_id: Id) -> Task<Message> {
             settings
         },
         Some(Box::new(|state: &AppModel| {
-            let body = ui::menu_view();
+            let body = ui::menu_view(state.is_paused());
             Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
         })),
     );
@@ -493,6 +565,30 @@ async fn refresh_and_fetch(
     };
     let events = calendar::upcoming_events(&tokens.access_token).await?;
     Ok((tokens, events))
+}
+
+/// Drop a manual pause override once it matches what the auto-pause rule would
+/// decide on its own; otherwise keep the explicit user choice.
+fn reconciled_override(override_: Option<bool>, auto_paused: bool) -> Option<bool> {
+    match override_ {
+        Some(v) if v == auto_paused => None,
+        other => other,
+    }
+}
+
+/// Record the current effective pause state into `last_paused` and report
+/// whether this is the paused -> running edge — the only transition that
+/// warrants an immediate refetch.
+fn just_resumed(last_paused: &mut bool, paused: bool) -> bool {
+    std::mem::replace(last_paused, paused) && !paused
+}
+
+fn is_weekend_local() -> bool {
+    use chrono::Datelike;
+    matches!(
+        chrono::Local::now().weekday(),
+        chrono::Weekday::Sat | chrono::Weekday::Sun
+    )
 }
 
 fn recompute_next(
@@ -708,6 +804,46 @@ mod tests {
             meet_url: None,
             location: None,
         }
+    }
+
+    #[test]
+    fn reconcile_keeps_override_that_fights_auto_rule() {
+        // Weekend auto-pause is on; user hits "Resume" -> Some(false) while the
+        // rule wants paused. The explicit choice must survive the weekend.
+        assert_eq!(reconciled_override(Some(false), true), Some(false));
+        // Midweek manual pause -> Some(true) while the rule wants running.
+        assert_eq!(reconciled_override(Some(true), false), Some(true));
+    }
+
+    #[test]
+    fn reconcile_drops_override_that_agrees_with_auto_rule() {
+        // Weekend ends: the "Resume" override now matches the rule, so drop it
+        // and let future weekends auto-pause again.
+        assert_eq!(reconciled_override(Some(false), false), None);
+        // Weekend starts while a manual pause is active: the rule already wants
+        // paused, so the override becomes redundant.
+        assert_eq!(reconciled_override(Some(true), true), None);
+    }
+
+    #[test]
+    fn reconcile_leaves_unset_override_untouched() {
+        assert_eq!(reconciled_override(None, true), None);
+        assert_eq!(reconciled_override(None, false), None);
+    }
+
+    #[test]
+    fn just_resumed_fires_only_on_paused_to_running_edge() {
+        let mut last_paused = false;
+        // Steady running: no refetch.
+        assert!(!just_resumed(&mut last_paused, false));
+        // Entering pause (weekend starts): no refetch, but the state is recorded.
+        assert!(!just_resumed(&mut last_paused, true));
+        assert!(last_paused);
+        // Steady paused: no refetch.
+        assert!(!just_resumed(&mut last_paused, true));
+        // Weekend ends: this is the edge that must refetch, exactly once.
+        assert!(just_resumed(&mut last_paused, false));
+        assert!(!just_resumed(&mut last_paused, false));
     }
 
     #[test]

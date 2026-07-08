@@ -43,6 +43,7 @@ pub enum Msg {
     ToggleShowTime(bool),
     ToggleShowProgress(bool),
     ToggleNotify(bool),
+    ToggleDisableDuringWeekend(bool),
     SetLeadIdx(usize),
     TryNotify,
     Authorize,
@@ -111,6 +112,7 @@ impl cosmic::Application for SettingsApp {
             on_toggle_show_time: Msg::ToggleShowTime,
             on_toggle_show_progress: Msg::ToggleShowProgress,
             on_toggle_notify: Msg::ToggleNotify,
+            on_toggle_disable_during_weekend: Msg::ToggleDisableDuringWeekend,
             on_lead_change: Msg::SetLeadIdx,
             on_try_notify: Msg::TryNotify,
             authorize: Msg::Authorize,
@@ -123,6 +125,7 @@ impl cosmic::Application for SettingsApp {
             self.config.show_progress,
             self.config.notify,
             self.config.notification_lead_secs,
+            self.config.disable_during_weekend,
             &self.status,
             self.authorizing,
             &handlers,
@@ -152,6 +155,11 @@ impl cosmic::Application for SettingsApp {
 
             Msg::ToggleNotify(on) => {
                 self.config.notify = on;
+                persist_config(&self.config);
+            }
+
+            Msg::ToggleDisableDuringWeekend(on) => {
+                self.config.disable_during_weekend = on;
                 persist_config(&self.config);
             }
 

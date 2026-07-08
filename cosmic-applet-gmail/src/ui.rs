@@ -27,11 +27,11 @@ impl CredentialsForm {
     }
 }
 
-/// `manual_paused` drives the Pause/Resume label (what the menu toggle
-/// controls); `effective_paused` (manual OR weekend auto-pause) decides whether
-/// the Refresh item is shown, since refreshing does nothing while paused.
-pub fn menu_view<'a>(manual_paused: bool, effective_paused: bool) -> Element<'a, Message> {
-    let pause_label = if manual_paused { "Resume" } else { "Pause" };
+/// `effective_paused` (manual override or the weekend auto-pause) drives both
+/// the Pause/Resume label and whether the Refresh item is shown, since
+/// refreshing does nothing while paused.
+pub fn menu_view<'a>(effective_paused: bool) -> Element<'a, Message> {
+    let pause_label = if effective_paused { "Resume" } else { "Pause" };
     let mut col = Column::new()
         .padding(4)
         .spacing(0)
