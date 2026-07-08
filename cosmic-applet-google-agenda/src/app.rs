@@ -38,6 +38,11 @@ pub struct AppModel {
     /// `Some(true)`/`Some(false)` is an explicit user choice that overrides it
     /// (so "Resume" works even on a weekend, and "Pause" works midweek).
     pub paused_override: Option<bool>,
+    /// Effective pause state seen by the previous `Tick`/`TogglePause`. Needed
+    /// to detect the paused -> running edge: the fetch subscription is only
+    /// recreated at that point and won't fire for a full `fetch_interval`, so
+    /// the edge triggers an immediate refetch.
+    pub last_paused: bool,
 }
 
 impl AppModel {
@@ -134,11 +139,15 @@ impl cosmic::Application for AppModel {
             })
             .unwrap_or_default();
 
-        let app = AppModel {
+        let mut app = AppModel {
             core,
             config: config.clone(),
             ..Default::default()
         };
+        // Seed the edge detector with the real state, so a "Resume" click
+        // before the first Tick (e.g. right after a weekend startup) still
+        // counts as a paused -> running transition and refetches.
+        app.last_paused = app.is_paused();
 
         let task = if config.is_configured() {
             let email = config.email.clone();
@@ -348,9 +357,10 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Tick => {
-                let was_paused = self.is_paused();
                 self.reconcile_pause_override();
-                if self.is_paused() {
+                let paused = self.is_paused();
+                let resumed = just_resumed(&mut self.last_paused, paused);
+                if paused {
                     return Task::none();
                 }
                 let now = Utc::now();
@@ -362,10 +372,10 @@ impl cosmic::Application for AppModel {
                     0
                 };
                 maybe_notify(self.next.as_ref(), &mut self.notified, lead, now);
-                if was_paused {
-                    // Weekend just ended: the fetch subscription is only now being
-                    // (re)created and won't tick for a full fetch_interval, so pull
-                    // fresh events immediately instead of showing stale ones.
+                if resumed {
+                    // The pause just ended (weekend rollover, or the setting was
+                    // switched off): pull fresh events immediately instead of
+                    // showing stale ones until the recreated subscription fires.
                     return cosmic::task::message(cosmic::Action::App(Message::Refetch));
                 }
             }
@@ -390,10 +400,11 @@ impl cosmic::Application for AppModel {
                     .menu_popup
                     .take()
                     .map_or_else(Task::none, |id| dispatch_surface(destroy_popup(id)));
-                let resume_fetch = if self.is_paused() {
-                    Task::none()
-                } else {
+                let paused = self.is_paused();
+                let resume_fetch = if just_resumed(&mut self.last_paused, paused) {
                     cosmic::task::message(cosmic::Action::App(Message::Refetch))
+                } else {
+                    Task::none()
                 };
                 return Task::batch([destroy_menu, resume_fetch]);
             }
@@ -563,6 +574,13 @@ fn reconciled_override(override_: Option<bool>, auto_paused: bool) -> Option<boo
         Some(v) if v == auto_paused => None,
         other => other,
     }
+}
+
+/// Record the current effective pause state into `last_paused` and report
+/// whether this is the paused -> running edge — the only transition that
+/// warrants an immediate refetch.
+fn just_resumed(last_paused: &mut bool, paused: bool) -> bool {
+    std::mem::replace(last_paused, paused) && !paused
 }
 
 fn is_weekend_local() -> bool {
@@ -811,6 +829,21 @@ mod tests {
     fn reconcile_leaves_unset_override_untouched() {
         assert_eq!(reconciled_override(None, true), None);
         assert_eq!(reconciled_override(None, false), None);
+    }
+
+    #[test]
+    fn just_resumed_fires_only_on_paused_to_running_edge() {
+        let mut last_paused = false;
+        // Steady running: no refetch.
+        assert!(!just_resumed(&mut last_paused, false));
+        // Entering pause (weekend starts): no refetch, but the state is recorded.
+        assert!(!just_resumed(&mut last_paused, true));
+        assert!(last_paused);
+        // Steady paused: no refetch.
+        assert!(!just_resumed(&mut last_paused, true));
+        // Weekend ends: this is the edge that must refetch, exactly once.
+        assert!(just_resumed(&mut last_paused, false));
+        assert!(!just_resumed(&mut last_paused, false));
     }
 
     #[test]
