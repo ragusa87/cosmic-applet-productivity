@@ -1166,6 +1166,12 @@ fn spawn_subwindow(flag: &'static str) -> Task<Message> {
     })
 }
 
+/// Single popup width shared by the timer-list and edit views, so the popup
+/// doesn't resize when switching between them. Sized for the edit view's
+/// session table (multi-line description editor + start/end inputs).
+const POPUP_WIDTH: f32 = 1440.0;
+const POPUP_MAX_HEIGHT: f32 = 1440.0;
+
 fn open_popup(new_id: Id) -> Task<Message> {
     let action = surface::action::app_popup::<AppModel>(
         move |state: &mut AppModel| {
@@ -1176,15 +1182,27 @@ fn open_popup(new_id: Id) -> Task<Message> {
                 .get_popup_settings(parent, new_id, None, None, None);
             settings.grab = true;
             settings.positioner.size_limits = Limits::NONE
-                .max_width(1640.0)
-                .min_width(1120.0)
+                .max_width(POPUP_WIDTH)
+                .min_width(POPUP_WIDTH)
                 .min_height(240.0)
-                .max_height(1440.0);
+                .max_height(POPUP_MAX_HEIGHT);
             settings
         },
         Some(Box::new(|state: &AppModel| {
             let body = ui::popup_view(state);
-            Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
+            // `popup_container` hard-caps its autosize widget at 360px wide,
+            // which clips the timer labels; override its limits so the popup
+            // actually gets the width the positioner asks for. The content
+            // column is `Length::Fill`, so the popup renders at exactly
+            // `POPUP_WIDTH`.
+            let container = state.core.applet.popup_container(body).limits(
+                Limits::NONE
+                    .min_width(POPUP_WIDTH)
+                    .max_width(POPUP_WIDTH)
+                    .min_height(1.0)
+                    .max_height(POPUP_MAX_HEIGHT),
+            );
+            Element::from(container).map(cosmic::Action::App)
         })),
     );
     dispatch_surface(action)
