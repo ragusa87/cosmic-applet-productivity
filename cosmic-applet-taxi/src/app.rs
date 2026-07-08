@@ -110,6 +110,9 @@ pub struct AppModel {
     pub edit_buf: EditBuf,
     pub add_buf: AddBuf,
     pub status: Option<String>,
+    /// First click on the footer "Clear all timers" button arms this; a
+    /// second click commits. Any other popup interaction disarms.
+    pub pending_clear_all: bool,
 }
 
 impl Default for AppModel {
@@ -129,6 +132,7 @@ impl Default for AppModel {
             edit_buf: EditBuf::default(),
             add_buf: AddBuf::default(),
             status: None,
+            pending_clear_all: false,
         }
     }
 }
@@ -148,6 +152,7 @@ pub enum Message {
     StartPause(Uuid),
     Pause,
     Reset(Uuid),
+    ClearAllTimers,
 
     BeginAdd,
     CancelAdd,
@@ -343,6 +348,7 @@ impl cosmic::Application for AppModel {
                     self.menu_popup = None;
                     self.editing = None;
                     self.add_buf = AddBuf::default();
+                    self.pending_clear_all = false;
                 }
             }
 
@@ -410,6 +416,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::StartPause(id) => {
+                self.pending_clear_all = false;
                 let now = Local::now();
                 let running = self.state.find_timer(id).is_some_and(Timer::is_running);
                 if running {
@@ -421,16 +428,25 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Pause => {
+                self.pending_clear_all = false;
                 self.state.pause_all_running(Local::now());
                 self.persist();
             }
 
             Message::Reset(id) => {
+                self.pending_clear_all = false;
                 self.state.reset_timer(id);
                 self.persist();
             }
 
+            Message::ClearAllTimers => {
+                if apply_clear_all(&mut self.pending_clear_all, &mut self.state) {
+                    self.persist();
+                }
+            }
+
             Message::BeginAdd => {
+                self.pending_clear_all = false;
                 self.add_buf.active = true;
                 self.add_buf.alias.clear();
             }
@@ -464,6 +480,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::StartEdit(id) => {
+                self.pending_clear_all = false;
                 // Pause the timer first if it's running, so the edit
                 // table shows stable times instead of a row whose end
                 // keeps growing while the user types.
@@ -576,6 +593,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::OpenSettings => {
+                self.pending_clear_all = false;
                 let destroy_popup = self
                     .menu_popup
                     .take()
@@ -584,6 +602,7 @@ impl cosmic::Application for AppModel {
                 return Task::batch([destroy_popup, launch]);
             }
             Message::OpenExport => {
+                self.pending_clear_all = false;
                 let destroy_popup = self
                     .menu_popup
                     .take()
@@ -593,6 +612,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::RefreshAliases => {
+                self.pending_clear_all = false;
                 if !self.taxi.available {
                     return Task::none();
                 }
@@ -1066,6 +1086,20 @@ pub fn fmt_duration_hms_short(d: Duration) -> String {
     format!("{h:02}:{m:02}")
 }
 
+/// Two-click "Clear all timers": the first call arms `pending`, the second
+/// commits the clear. Returns `true` when the clear was committed so the
+/// caller knows to persist.
+fn apply_clear_all(pending: &mut bool, state: &mut AppState) -> bool {
+    if *pending {
+        *pending = false;
+        state.clear_all_timers();
+        true
+    } else {
+        *pending = true;
+        false
+    }
+}
+
 fn dispatch_surface(a: surface::Action) -> Task<Message> {
     cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(a)))
 }
@@ -1190,6 +1224,60 @@ mod tests {
             date_format: "%d/%m/%Y".to_owned(),
             aliases: std::collections::BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn clear_all_requires_two_clicks() {
+        let mut state = AppState::default();
+        state.add_timer("_a".into(), String::new()).unwrap();
+        let mut pending = false;
+
+        assert!(
+            !apply_clear_all(&mut pending, &mut state),
+            "first click arms only"
+        );
+        assert!(pending);
+        assert_eq!(state.timers.len(), 1, "nothing cleared on first click");
+
+        assert!(
+            apply_clear_all(&mut pending, &mut state),
+            "second click commits"
+        );
+        assert!(!pending);
+        assert!(state.timers.is_empty());
+        assert!(state.suppressed_aliases.contains(&"_a".to_string()));
+    }
+
+    #[test]
+    fn clear_all_disarmed_by_other_action() {
+        use cosmic::Application as _;
+        let mut app = AppModel::default();
+        app.state.add_timer("_a".into(), String::new()).unwrap();
+
+        let _ = app.update(Message::ClearAllTimers);
+        assert!(app.pending_clear_all);
+        // Any other popup interaction disarms (none of these persist).
+        let _ = app.update(Message::BeginAdd);
+        assert!(!app.pending_clear_all, "other action must disarm");
+        assert_eq!(app.state.timers.len(), 1);
+        // The next click re-arms instead of clearing.
+        let _ = app.update(Message::ClearAllTimers);
+        assert!(app.pending_clear_all);
+        assert_eq!(app.state.timers.len(), 1);
+    }
+
+    #[test]
+    fn tick_does_not_disarm_clear_all() {
+        use cosmic::Application as _;
+        let mut app = AppModel::default();
+        app.state.add_timer("_a".into(), String::new()).unwrap();
+
+        let _ = app.update(Message::ClearAllTimers);
+        let _ = app.update(Message::Tick);
+        assert!(
+            app.pending_clear_all,
+            "background Tick must not disarm the pending confirmation"
+        );
     }
 
     #[test]

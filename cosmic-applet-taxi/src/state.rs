@@ -182,6 +182,17 @@ impl AppState {
         }
     }
 
+    /// Remove every timer and suppress their aliases so
+    /// `seed_timers_from_tks` doesn't immediately re-create them from the
+    /// .tks files. Same suppression semantics as [`remove_timer`](Self::remove_timer).
+    pub fn clear_all_timers(&mut self) {
+        for timer in self.timers.drain(..) {
+            if !timer.alias.is_empty() && !self.suppressed_aliases.contains(&timer.alias) {
+                self.suppressed_aliases.push(timer.alias);
+            }
+        }
+    }
+
     pub fn pause_all_running(&mut self, now: DateTime<Local>) {
         for t in &mut self.timers {
             if let Some(s) = t.running_session_mut() {
@@ -432,6 +443,28 @@ mod tests {
         let a = s.add_timer("_a".into(), String::new()).unwrap();
         s.remove_timer(a);
         assert!(s.suppressed_aliases.contains(&"_a".to_string()));
+    }
+
+    #[test]
+    fn clear_all_timers_empties_and_suppresses() {
+        let mut s = AppState::default();
+        let a = s.add_timer("_a".into(), String::new()).unwrap();
+        s.add_timer("_b".into(), String::new()).unwrap();
+        s.start_timer(a, at(9, 0));
+        // "_b" already suppressed once (deleted then re-added) — must not duplicate.
+        s.suppressed_aliases.push("_b".to_owned());
+
+        s.clear_all_timers();
+
+        assert!(s.timers.is_empty());
+        assert!(s.suppressed_aliases.contains(&"_a".to_string()));
+        assert_eq!(
+            s.suppressed_aliases
+                .iter()
+                .filter(|a| a.as_str() == "_b")
+                .count(),
+            1
+        );
     }
 
     #[test]
