@@ -102,6 +102,21 @@ pub struct AppState {
 const SCHEMA_VERSION: u32 = 1;
 
 impl AppState {
+    /// In test builds this resolves under the system temp dir instead of the
+    /// XDG state dir, so no test — current or future, even one calling
+    /// [`load`](Self::load)/[`save`](Self::save) directly — can ever read or
+    /// overwrite the user's real state file.
+    #[cfg(test)]
+    pub fn state_path() -> Result<PathBuf> {
+        Ok(std::env::temp_dir()
+            .join(format!(
+                "cosmic-applet-taxi-test-state-{}",
+                std::process::id()
+            ))
+            .join("state.json"))
+    }
+
+    #[cfg(not(test))]
     pub fn state_path() -> Result<PathBuf> {
         let dir = dirs::state_dir()
             .or_else(dirs::data_local_dir)
@@ -109,8 +124,14 @@ impl AppState {
         Ok(dir.join("cosmic-applet-taxi").join("state.json"))
     }
 
+    /// Load from the default XDG location. Production entry points only —
+    /// code under test must go through [`load_from`](Self::load_from) with an
+    /// injected path so tests can never touch the user's real state.
     pub fn load() -> Result<Self> {
-        let path = Self::state_path()?;
+        Self::load_from(&Self::state_path()?)
+    }
+
+    pub fn load_from(path: &std::path::Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self {
                 schema_version: SCHEMA_VERSION,
@@ -118,7 +139,7 @@ impl AppState {
                 ..Self::default()
             });
         }
-        let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
         let mut state: AppState =
             serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
         if state.schema_version == 0 {
@@ -127,14 +148,19 @@ impl AppState {
         Ok(state)
     }
 
+    /// Save to the default XDG location. Production entry points only — see
+    /// [`load`](Self::load).
     pub fn save(&self) -> Result<()> {
-        let path = Self::state_path()?;
+        self.save_to(&Self::state_path()?)
+    }
+
+    pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
         let json = serde_json::to_vec_pretty(self).context("serialize state")?;
-        atomic::write_preserving_mode(&path, &json, 0o644)
+        atomic::write_preserving_mode(path, &json, 0o644)
             .with_context(|| format!("atomic write {}", path.display()))?;
         Ok(())
     }
@@ -396,6 +422,19 @@ mod tests {
 
     fn at(h: u32, m: u32) -> DateTime<Local> {
         Local.with_ymd_and_hms(2026, 5, 13, h, m, 0).unwrap()
+    }
+
+    /// Guards the `#[cfg(test)]` redirect on `state_path`: test builds must
+    /// resolve the state file under the system temp dir, never the user's
+    /// real XDG state dir.
+    #[test]
+    fn state_path_is_redirected_in_test_builds() {
+        let path = AppState::state_path().expect("state path resolves");
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "test-build state path must live under temp dir, got {}",
+            path.display()
+        );
     }
 
     #[test]

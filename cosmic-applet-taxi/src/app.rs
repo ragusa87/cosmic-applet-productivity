@@ -113,6 +113,11 @@ pub struct AppModel {
     /// First click on the footer "Clear all timers" button arms this; a
     /// second click commits. Any other popup interaction disarms.
     pub pending_clear_all: bool,
+    /// Where [`persist`](Self::persist) writes the state. Resolved from the
+    /// XDG state dir in [`init`]; `None` (the default) makes persistence a
+    /// no-op, so test-constructed models can never touch the user's real
+    /// state file — tests that verify persistence inject a temp path.
+    pub state_file: Option<std::path::PathBuf>,
 }
 
 impl Default for AppModel {
@@ -133,6 +138,7 @@ impl Default for AppModel {
             add_buf: AddBuf::default(),
             status: None,
             pending_clear_all: false,
+            state_file: None,
         }
     }
 }
@@ -222,18 +228,34 @@ impl cosmic::Application for AppModel {
             })
             .unwrap_or_default();
 
-        let mut state = AppState::load().unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "loading state failed; starting fresh");
-            AppState {
-                total_selected: true,
-                ..AppState::default()
-            }
-        });
+        let state_file = AppState::state_path()
+            .inspect_err(|e| tracing::warn!(error = %e, "resolving state path failed; state will not persist"))
+            .ok();
+
+        let mut state = state_file
+            .as_deref()
+            .map_or_else(
+                || {
+                    Ok(AppState {
+                        total_selected: true,
+                        ..AppState::default()
+                    })
+                },
+                AppState::load_from,
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "loading state failed; starting fresh");
+                AppState {
+                    total_selected: true,
+                    ..AppState::default()
+                }
+            });
 
         // We're up and running, so the session is unlocked: resolve any lock
         // that was still pending at our last exit instead of leaving it armed.
         if state.resume_unlocked(Local::now(), config.enable_autopause)
-            && let Err(e) = state.save()
+            && let Some(path) = &state_file
+            && let Err(e) = state.save_to(path)
         {
             tracing::warn!(error = %e, "persisting unlock-on-restart failed");
         }
@@ -242,6 +264,7 @@ impl cosmic::Application for AppModel {
             core,
             config: config.clone(),
             state,
+            state_file,
             ..Default::default()
         };
 
@@ -406,7 +429,9 @@ impl cosmic::Application for AppModel {
             }
 
             Message::ForceRefresh => {
-                if let Ok(s) = AppState::load() {
+                if let Some(path) = &self.state_file
+                    && let Ok(s) = AppState::load_from(path)
+                {
                     self.state = s;
                 }
                 let config = self.config.clone();
@@ -509,11 +534,22 @@ impl cosmic::Application for AppModel {
                 self.edit_buf.pending_delete_timer = false;
             }
             Message::EditSessionDesc(i, action) => {
+                // Every description editor publishes `ClearSelection` on any
+                // mousedown outside its bounds (libcosmic focus cleanup), so
+                // one arrives between the mousedown and mouseup of the click
+                // meant to confirm a delete. It is not a user interaction
+                // with the editor and must not disarm the confirmations —
+                // otherwise the armed "delete?" / "Confirm delete?" button
+                // disarms at mousedown and re-arms at mouseup, forever.
+                let focus_cleanup =
+                    matches!(action, cosmic::widget::text_editor::Action::ClearSelection);
                 if let Some(row) = self.edit_buf.sessions.get_mut(i) {
                     row.description.perform(action);
                 }
-                self.edit_buf.pending_delete = None;
-                self.edit_buf.pending_delete_timer = false;
+                if !focus_cleanup {
+                    self.edit_buf.pending_delete = None;
+                    self.edit_buf.pending_delete_timer = false;
+                }
             }
             Message::EditSessionStart(i, s) => {
                 if let Some(row) = self.edit_buf.sessions.get_mut(i) {
@@ -562,15 +598,8 @@ impl cosmic::Application for AppModel {
             }
 
             Message::EditDeleteTimer => {
-                self.edit_buf.pending_delete = None;
-                if self.edit_buf.pending_delete_timer {
-                    if let Some(id) = self.editing.take() {
-                        self.state.remove_timer(id);
-                        self.edit_buf = EditBuf::default();
-                        self.persist();
-                    }
-                } else {
-                    self.edit_buf.pending_delete_timer = true;
+                if apply_delete_timer(&mut self.edit_buf, &mut self.editing, &mut self.state) {
+                    self.persist();
                 }
             }
 
@@ -690,7 +719,10 @@ impl AppModel {
     }
 
     fn persist(&self) {
-        if let Err(e) = self.state.save() {
+        let Some(path) = &self.state_file else {
+            return;
+        };
+        if let Err(e) = self.state.save_to(path) {
             tracing::warn!(error = %e, "saving state failed");
         }
     }
@@ -1086,6 +1118,29 @@ pub fn fmt_duration_hms_short(d: Duration) -> String {
     format!("{h:02}:{m:02}")
 }
 
+/// Two-click "Delete timer": the first call arms the confirmation, the
+/// second removes the edited timer and leaves edit mode. Returns `true` when
+/// the delete was committed so the caller knows to persist.
+fn apply_delete_timer(
+    edit_buf: &mut EditBuf,
+    editing: &mut Option<Uuid>,
+    state: &mut AppState,
+) -> bool {
+    edit_buf.pending_delete = None;
+    if edit_buf.pending_delete_timer {
+        if let Some(id) = editing.take() {
+            state.remove_timer(id);
+            *edit_buf = EditBuf::default();
+            return true;
+        }
+        edit_buf.pending_delete_timer = false;
+        false
+    } else {
+        edit_buf.pending_delete_timer = true;
+        false
+    }
+}
+
 /// Two-click "Clear all timers": the first call arms `pending`, the second
 /// commits the clear. Returns `true` when the clear was committed so the
 /// caller knows to persist.
@@ -1264,6 +1319,103 @@ mod tests {
         assert!(!pending);
         assert!(state.timers.is_empty());
         assert!(state.suppressed_aliases.contains(&"_a".to_string()));
+    }
+
+    #[test]
+    fn delete_timer_requires_two_clicks() {
+        let mut state = AppState::default();
+        let id = state.add_timer("_a".into(), String::new()).unwrap();
+        let mut editing = Some(id);
+        let mut edit_buf = EditBuf::default();
+
+        assert!(
+            !apply_delete_timer(&mut edit_buf, &mut editing, &mut state),
+            "first click arms only"
+        );
+        assert!(edit_buf.pending_delete_timer);
+        assert_eq!(state.timers.len(), 1);
+
+        assert!(
+            apply_delete_timer(&mut edit_buf, &mut editing, &mut state),
+            "second click commits"
+        );
+        assert!(state.timers.is_empty());
+        assert_eq!(editing, None);
+        assert!(state.suppressed_aliases.contains(&"_a".to_string()));
+    }
+
+    /// Full two-click delete through `update()`, persisting to an injected
+    /// temp path. A default `AppModel` has `state_file: None`, so no test can
+    /// ever write the user's real state file.
+    #[test]
+    fn edit_delete_timer_persists_to_injected_path() {
+        use cosmic::Application as _;
+        let dir = tempdir();
+        let path = dir.join("state.json");
+        let mut app = AppModel {
+            state_file: Some(path.clone()),
+            ..Default::default()
+        };
+        let id = app.state.add_timer("_a".into(), String::new()).unwrap();
+
+        let _ = app.update(Message::StartEdit(id));
+        let _ = app.update(Message::EditDeleteTimer);
+        assert!(!path.exists(), "arming must not persist");
+
+        let _ = app.update(Message::EditDeleteTimer);
+        assert!(app.state.timers.is_empty());
+        assert_eq!(app.editing, None);
+
+        let saved = AppState::load_from(&path).expect("state written on commit");
+        assert!(saved.timers.is_empty());
+        assert!(saved.suppressed_aliases.contains(&"_a".to_string()));
+    }
+
+    /// Regression test: every description `text_editor` publishes a
+    /// `ClearSelection` action on any mousedown outside its bounds (libcosmic
+    /// focus cleanup), so one lands between the mousedown and mouseup of the
+    /// click meant to confirm a delete. That cleanup action must not disarm
+    /// the pending confirmations, or the second click can never commit.
+    #[test]
+    fn clear_selection_does_not_disarm_delete_confirmations() {
+        use cosmic::Application as _;
+        use cosmic::widget::text_editor::{Action, Edit};
+
+        let (state, id) = yesterday_state();
+        let mut app = AppModel {
+            state,
+            ..Default::default()
+        };
+        let _ = app.update(Message::StartEdit(id));
+        assert_eq!(app.edit_buf.sessions.len(), 1);
+
+        // Session row: arm, take the stray ClearSelection, confirm.
+        let _ = app.update(Message::EditDeleteSession(0));
+        assert_eq!(app.edit_buf.pending_delete, Some(0));
+        let _ = app.update(Message::EditSessionDesc(0, Action::ClearSelection));
+        assert_eq!(
+            app.edit_buf.pending_delete,
+            Some(0),
+            "focus cleanup must not disarm"
+        );
+        let _ = app.update(Message::EditDeleteSession(0));
+        assert!(app.edit_buf.sessions.is_empty(), "second click deletes");
+
+        // Timer-level confirm survives the cleanup action too.
+        let _ = app.update(Message::EditDeleteTimer);
+        assert!(app.edit_buf.pending_delete_timer);
+        let _ = app.update(Message::EditSessionDesc(0, Action::ClearSelection));
+        assert!(app.edit_buf.pending_delete_timer);
+
+        // A real editor interaction still disarms.
+        let _ = app.update(Message::EditAddSession);
+        let _ = app.update(Message::EditDeleteTimer);
+        assert!(app.edit_buf.pending_delete_timer);
+        let _ = app.update(Message::EditSessionDesc(0, Action::Edit(Edit::Insert('x'))));
+        assert!(
+            !app.edit_buf.pending_delete_timer,
+            "typing must still disarm"
+        );
     }
 
     #[test]
