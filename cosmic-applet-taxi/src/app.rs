@@ -110,6 +110,14 @@ pub struct AppModel {
     pub edit_buf: EditBuf,
     pub add_buf: AddBuf,
     pub status: Option<String>,
+    /// First click on the footer "Clear all timers" button arms this; a
+    /// second click commits. Any other popup interaction disarms.
+    pub pending_clear_all: bool,
+    /// Where [`persist`](Self::persist) writes the state. Resolved from the
+    /// XDG state dir in [`init`]; `None` (the default) makes persistence a
+    /// no-op, so test-constructed models can never touch the user's real
+    /// state file — tests that verify persistence inject a temp path.
+    pub state_file: Option<std::path::PathBuf>,
 }
 
 impl Default for AppModel {
@@ -129,6 +137,8 @@ impl Default for AppModel {
             edit_buf: EditBuf::default(),
             add_buf: AddBuf::default(),
             status: None,
+            pending_clear_all: false,
+            state_file: None,
         }
     }
 }
@@ -148,6 +158,7 @@ pub enum Message {
     StartPause(Uuid),
     Pause,
     Reset(Uuid),
+    ClearAllTimers,
 
     BeginAdd,
     CancelAdd,
@@ -217,18 +228,34 @@ impl cosmic::Application for AppModel {
             })
             .unwrap_or_default();
 
-        let mut state = AppState::load().unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "loading state failed; starting fresh");
-            AppState {
-                total_selected: true,
-                ..AppState::default()
-            }
-        });
+        let state_file = AppState::state_path()
+            .inspect_err(|e| tracing::warn!(error = %e, "resolving state path failed; state will not persist"))
+            .ok();
+
+        let mut state = state_file
+            .as_deref()
+            .map_or_else(
+                || {
+                    Ok(AppState {
+                        total_selected: true,
+                        ..AppState::default()
+                    })
+                },
+                AppState::load_from,
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "loading state failed; starting fresh");
+                AppState {
+                    total_selected: true,
+                    ..AppState::default()
+                }
+            });
 
         // We're up and running, so the session is unlocked: resolve any lock
         // that was still pending at our last exit instead of leaving it armed.
         if state.resume_unlocked(Local::now(), config.enable_autopause)
-            && let Err(e) = state.save()
+            && let Some(path) = &state_file
+            && let Err(e) = state.save_to(path)
         {
             tracing::warn!(error = %e, "persisting unlock-on-restart failed");
         }
@@ -237,6 +264,7 @@ impl cosmic::Application for AppModel {
             core,
             config: config.clone(),
             state,
+            state_file,
             ..Default::default()
         };
 
@@ -343,6 +371,7 @@ impl cosmic::Application for AppModel {
                     self.menu_popup = None;
                     self.editing = None;
                     self.add_buf = AddBuf::default();
+                    self.pending_clear_all = false;
                 }
             }
 
@@ -400,7 +429,9 @@ impl cosmic::Application for AppModel {
             }
 
             Message::ForceRefresh => {
-                if let Ok(s) = AppState::load() {
+                if let Some(path) = &self.state_file
+                    && let Ok(s) = AppState::load_from(path)
+                {
                     self.state = s;
                 }
                 let config = self.config.clone();
@@ -410,6 +441,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::StartPause(id) => {
+                self.pending_clear_all = false;
                 let now = Local::now();
                 let running = self.state.find_timer(id).is_some_and(Timer::is_running);
                 if running {
@@ -421,16 +453,25 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Pause => {
+                self.pending_clear_all = false;
                 self.state.pause_all_running(Local::now());
                 self.persist();
             }
 
             Message::Reset(id) => {
+                self.pending_clear_all = false;
                 self.state.reset_timer(id);
                 self.persist();
             }
 
+            Message::ClearAllTimers => {
+                if apply_clear_all(&mut self.pending_clear_all, &mut self.state) {
+                    self.persist();
+                }
+            }
+
             Message::BeginAdd => {
+                self.pending_clear_all = false;
                 self.add_buf.active = true;
                 self.add_buf.alias.clear();
             }
@@ -464,6 +505,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::StartEdit(id) => {
+                self.pending_clear_all = false;
                 // Pause the timer first if it's running, so the edit
                 // table shows stable times instead of a row whose end
                 // keeps growing while the user types.
@@ -492,11 +534,22 @@ impl cosmic::Application for AppModel {
                 self.edit_buf.pending_delete_timer = false;
             }
             Message::EditSessionDesc(i, action) => {
+                // Every description editor publishes `ClearSelection` on any
+                // mousedown outside its bounds (libcosmic focus cleanup), so
+                // one arrives between the mousedown and mouseup of the click
+                // meant to confirm a delete. It is not a user interaction
+                // with the editor and must not disarm the confirmations —
+                // otherwise the armed "delete?" / "Confirm delete?" button
+                // disarms at mousedown and re-arms at mouseup, forever.
+                let focus_cleanup =
+                    matches!(action, cosmic::widget::text_editor::Action::ClearSelection);
                 if let Some(row) = self.edit_buf.sessions.get_mut(i) {
                     row.description.perform(action);
                 }
-                self.edit_buf.pending_delete = None;
-                self.edit_buf.pending_delete_timer = false;
+                if !focus_cleanup {
+                    self.edit_buf.pending_delete = None;
+                    self.edit_buf.pending_delete_timer = false;
+                }
             }
             Message::EditSessionStart(i, s) => {
                 if let Some(row) = self.edit_buf.sessions.get_mut(i) {
@@ -545,15 +598,8 @@ impl cosmic::Application for AppModel {
             }
 
             Message::EditDeleteTimer => {
-                self.edit_buf.pending_delete = None;
-                if self.edit_buf.pending_delete_timer {
-                    if let Some(id) = self.editing.take() {
-                        self.state.remove_timer(id);
-                        self.edit_buf = EditBuf::default();
-                        self.persist();
-                    }
-                } else {
-                    self.edit_buf.pending_delete_timer = true;
+                if apply_delete_timer(&mut self.edit_buf, &mut self.editing, &mut self.state) {
+                    self.persist();
                 }
             }
 
@@ -576,6 +622,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::OpenSettings => {
+                self.pending_clear_all = false;
                 let destroy_popup = self
                     .menu_popup
                     .take()
@@ -584,6 +631,7 @@ impl cosmic::Application for AppModel {
                 return Task::batch([destroy_popup, launch]);
             }
             Message::OpenExport => {
+                self.pending_clear_all = false;
                 let destroy_popup = self
                     .menu_popup
                     .take()
@@ -593,6 +641,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::RefreshAliases => {
+                self.pending_clear_all = false;
                 if !self.taxi.available {
                     return Task::none();
                 }
@@ -670,7 +719,10 @@ impl AppModel {
     }
 
     fn persist(&self) {
-        if let Err(e) = self.state.save() {
+        let Some(path) = &self.state_file else {
+            return;
+        };
+        if let Err(e) = self.state.save_to(path) {
             tracing::warn!(error = %e, "saving state failed");
         }
     }
@@ -1066,6 +1118,43 @@ pub fn fmt_duration_hms_short(d: Duration) -> String {
     format!("{h:02}:{m:02}")
 }
 
+/// Two-click "Delete timer": the first call arms the confirmation, the
+/// second removes the edited timer and leaves edit mode. Returns `true` when
+/// the delete was committed so the caller knows to persist.
+fn apply_delete_timer(
+    edit_buf: &mut EditBuf,
+    editing: &mut Option<Uuid>,
+    state: &mut AppState,
+) -> bool {
+    edit_buf.pending_delete = None;
+    if edit_buf.pending_delete_timer {
+        if let Some(id) = editing.take() {
+            state.remove_timer(id);
+            *edit_buf = EditBuf::default();
+            return true;
+        }
+        edit_buf.pending_delete_timer = false;
+        false
+    } else {
+        edit_buf.pending_delete_timer = true;
+        false
+    }
+}
+
+/// Two-click "Clear all timers": the first call arms `pending`, the second
+/// commits the clear. Returns `true` when the clear was committed so the
+/// caller knows to persist.
+fn apply_clear_all(pending: &mut bool, state: &mut AppState) -> bool {
+    if *pending {
+        *pending = false;
+        state.clear_all_timers();
+        true
+    } else {
+        *pending = true;
+        false
+    }
+}
+
 fn dispatch_surface(a: surface::Action) -> Task<Message> {
     cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(a)))
 }
@@ -1132,6 +1221,12 @@ fn spawn_subwindow(flag: &'static str) -> Task<Message> {
     })
 }
 
+/// Single popup width shared by the timer-list and edit views, so the popup
+/// doesn't resize when switching between them. Sized for the edit view's
+/// session table (multi-line description editor + start/end inputs).
+const POPUP_WIDTH: f32 = 1440.0;
+const POPUP_MAX_HEIGHT: f32 = 1440.0;
+
 fn open_popup(new_id: Id) -> Task<Message> {
     let action = surface::action::app_popup::<AppModel>(
         move |state: &mut AppModel| {
@@ -1142,15 +1237,27 @@ fn open_popup(new_id: Id) -> Task<Message> {
                 .get_popup_settings(parent, new_id, None, None, None);
             settings.grab = true;
             settings.positioner.size_limits = Limits::NONE
-                .max_width(1640.0)
-                .min_width(1120.0)
+                .max_width(POPUP_WIDTH)
+                .min_width(POPUP_WIDTH)
                 .min_height(240.0)
-                .max_height(1440.0);
+                .max_height(POPUP_MAX_HEIGHT);
             settings
         },
         Some(Box::new(|state: &AppModel| {
             let body = ui::popup_view(state);
-            Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
+            // `popup_container` hard-caps its autosize widget at 360px wide,
+            // which clips the timer labels; override its limits so the popup
+            // actually gets the width the positioner asks for. The content
+            // column is `Length::Fill`, so the popup renders at exactly
+            // `POPUP_WIDTH`.
+            let container = state.core.applet.popup_container(body).limits(
+                Limits::NONE
+                    .min_width(POPUP_WIDTH)
+                    .max_width(POPUP_WIDTH)
+                    .min_height(1.0)
+                    .max_height(POPUP_MAX_HEIGHT),
+            );
+            Element::from(container).map(cosmic::Action::App)
         })),
     );
     dispatch_surface(action)
@@ -1190,6 +1297,157 @@ mod tests {
             date_format: "%d/%m/%Y".to_owned(),
             aliases: std::collections::BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn clear_all_requires_two_clicks() {
+        let mut state = AppState::default();
+        state.add_timer("_a".into(), String::new()).unwrap();
+        let mut pending = false;
+
+        assert!(
+            !apply_clear_all(&mut pending, &mut state),
+            "first click arms only"
+        );
+        assert!(pending);
+        assert_eq!(state.timers.len(), 1, "nothing cleared on first click");
+
+        assert!(
+            apply_clear_all(&mut pending, &mut state),
+            "second click commits"
+        );
+        assert!(!pending);
+        assert!(state.timers.is_empty());
+        assert!(state.suppressed_aliases.contains(&"_a".to_string()));
+    }
+
+    #[test]
+    fn delete_timer_requires_two_clicks() {
+        let mut state = AppState::default();
+        let id = state.add_timer("_a".into(), String::new()).unwrap();
+        let mut editing = Some(id);
+        let mut edit_buf = EditBuf::default();
+
+        assert!(
+            !apply_delete_timer(&mut edit_buf, &mut editing, &mut state),
+            "first click arms only"
+        );
+        assert!(edit_buf.pending_delete_timer);
+        assert_eq!(state.timers.len(), 1);
+
+        assert!(
+            apply_delete_timer(&mut edit_buf, &mut editing, &mut state),
+            "second click commits"
+        );
+        assert!(state.timers.is_empty());
+        assert_eq!(editing, None);
+        assert!(state.suppressed_aliases.contains(&"_a".to_string()));
+    }
+
+    /// Full two-click delete through `update()`, persisting to an injected
+    /// temp path. A default `AppModel` has `state_file: None`, so no test can
+    /// ever write the user's real state file.
+    #[test]
+    fn edit_delete_timer_persists_to_injected_path() {
+        use cosmic::Application as _;
+        let dir = tempdir();
+        let path = dir.join("state.json");
+        let mut app = AppModel {
+            state_file: Some(path.clone()),
+            ..Default::default()
+        };
+        let id = app.state.add_timer("_a".into(), String::new()).unwrap();
+
+        let _ = app.update(Message::StartEdit(id));
+        let _ = app.update(Message::EditDeleteTimer);
+        assert!(!path.exists(), "arming must not persist");
+
+        let _ = app.update(Message::EditDeleteTimer);
+        assert!(app.state.timers.is_empty());
+        assert_eq!(app.editing, None);
+
+        let saved = AppState::load_from(&path).expect("state written on commit");
+        assert!(saved.timers.is_empty());
+        assert!(saved.suppressed_aliases.contains(&"_a".to_string()));
+    }
+
+    /// Regression test: every description `text_editor` publishes a
+    /// `ClearSelection` action on any mousedown outside its bounds (libcosmic
+    /// focus cleanup), so one lands between the mousedown and mouseup of the
+    /// click meant to confirm a delete. That cleanup action must not disarm
+    /// the pending confirmations, or the second click can never commit.
+    #[test]
+    fn clear_selection_does_not_disarm_delete_confirmations() {
+        use cosmic::Application as _;
+        use cosmic::widget::text_editor::{Action, Edit};
+
+        let (state, id) = yesterday_state();
+        let mut app = AppModel {
+            state,
+            ..Default::default()
+        };
+        let _ = app.update(Message::StartEdit(id));
+        assert_eq!(app.edit_buf.sessions.len(), 1);
+
+        // Session row: arm, take the stray ClearSelection, confirm.
+        let _ = app.update(Message::EditDeleteSession(0));
+        assert_eq!(app.edit_buf.pending_delete, Some(0));
+        let _ = app.update(Message::EditSessionDesc(0, Action::ClearSelection));
+        assert_eq!(
+            app.edit_buf.pending_delete,
+            Some(0),
+            "focus cleanup must not disarm"
+        );
+        let _ = app.update(Message::EditDeleteSession(0));
+        assert!(app.edit_buf.sessions.is_empty(), "second click deletes");
+
+        // Timer-level confirm survives the cleanup action too.
+        let _ = app.update(Message::EditDeleteTimer);
+        assert!(app.edit_buf.pending_delete_timer);
+        let _ = app.update(Message::EditSessionDesc(0, Action::ClearSelection));
+        assert!(app.edit_buf.pending_delete_timer);
+
+        // A real editor interaction still disarms.
+        let _ = app.update(Message::EditAddSession);
+        let _ = app.update(Message::EditDeleteTimer);
+        assert!(app.edit_buf.pending_delete_timer);
+        let _ = app.update(Message::EditSessionDesc(0, Action::Edit(Edit::Insert('x'))));
+        assert!(
+            !app.edit_buf.pending_delete_timer,
+            "typing must still disarm"
+        );
+    }
+
+    #[test]
+    fn clear_all_disarmed_by_other_action() {
+        use cosmic::Application as _;
+        let mut app = AppModel::default();
+        app.state.add_timer("_a".into(), String::new()).unwrap();
+
+        let _ = app.update(Message::ClearAllTimers);
+        assert!(app.pending_clear_all);
+        // Any other popup interaction disarms (none of these persist).
+        let _ = app.update(Message::BeginAdd);
+        assert!(!app.pending_clear_all, "other action must disarm");
+        assert_eq!(app.state.timers.len(), 1);
+        // The next click re-arms instead of clearing.
+        let _ = app.update(Message::ClearAllTimers);
+        assert!(app.pending_clear_all);
+        assert_eq!(app.state.timers.len(), 1);
+    }
+
+    #[test]
+    fn tick_does_not_disarm_clear_all() {
+        use cosmic::Application as _;
+        let mut app = AppModel::default();
+        app.state.add_timer("_a".into(), String::new()).unwrap();
+
+        let _ = app.update(Message::ClearAllTimers);
+        let _ = app.update(Message::Tick);
+        assert!(
+            app.pending_clear_all,
+            "background Tick must not disarm the pending confirmation"
+        );
     }
 
     #[test]

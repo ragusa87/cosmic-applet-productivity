@@ -102,6 +102,21 @@ pub struct AppState {
 const SCHEMA_VERSION: u32 = 1;
 
 impl AppState {
+    /// In test builds this resolves under the system temp dir instead of the
+    /// XDG state dir, so no test — current or future, even one calling
+    /// [`load`](Self::load)/[`save`](Self::save) directly — can ever read or
+    /// overwrite the user's real state file.
+    #[cfg(test)]
+    pub fn state_path() -> Result<PathBuf> {
+        Ok(std::env::temp_dir()
+            .join(format!(
+                "cosmic-applet-taxi-test-state-{}",
+                std::process::id()
+            ))
+            .join("state.json"))
+    }
+
+    #[cfg(not(test))]
     pub fn state_path() -> Result<PathBuf> {
         let dir = dirs::state_dir()
             .or_else(dirs::data_local_dir)
@@ -109,8 +124,14 @@ impl AppState {
         Ok(dir.join("cosmic-applet-taxi").join("state.json"))
     }
 
+    /// Load from the default XDG location. Production entry points only —
+    /// code under test must go through [`load_from`](Self::load_from) with an
+    /// injected path so tests can never touch the user's real state.
     pub fn load() -> Result<Self> {
-        let path = Self::state_path()?;
+        Self::load_from(&Self::state_path()?)
+    }
+
+    pub fn load_from(path: &std::path::Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self {
                 schema_version: SCHEMA_VERSION,
@@ -118,7 +139,7 @@ impl AppState {
                 ..Self::default()
             });
         }
-        let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
         let mut state: AppState =
             serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
         if state.schema_version == 0 {
@@ -127,14 +148,19 @@ impl AppState {
         Ok(state)
     }
 
+    /// Save to the default XDG location. Production entry points only — see
+    /// [`load`](Self::load).
     pub fn save(&self) -> Result<()> {
-        let path = Self::state_path()?;
+        self.save_to(&Self::state_path()?)
+    }
+
+    pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
         let json = serde_json::to_vec_pretty(self).context("serialize state")?;
-        atomic::write_preserving_mode(&path, &json, 0o644)
+        atomic::write_preserving_mode(path, &json, 0o644)
             .with_context(|| format!("atomic write {}", path.display()))?;
         Ok(())
     }
@@ -179,6 +205,17 @@ impl AppState {
         let timer = self.timers.remove(idx);
         if !timer.alias.is_empty() && !self.suppressed_aliases.contains(&timer.alias) {
             self.suppressed_aliases.push(timer.alias);
+        }
+    }
+
+    /// Remove every timer and suppress their aliases so
+    /// `seed_timers_from_tks` doesn't immediately re-create them from the
+    /// .tks files. Same suppression semantics as [`remove_timer`](Self::remove_timer).
+    pub fn clear_all_timers(&mut self) {
+        for timer in self.timers.drain(..) {
+            if !timer.alias.is_empty() && !self.suppressed_aliases.contains(&timer.alias) {
+                self.suppressed_aliases.push(timer.alias);
+            }
         }
     }
 
@@ -387,6 +424,19 @@ mod tests {
         Local.with_ymd_and_hms(2026, 5, 13, h, m, 0).unwrap()
     }
 
+    /// Guards the `#[cfg(test)]` redirect on `state_path`: test builds must
+    /// resolve the state file under the system temp dir, never the user's
+    /// real XDG state dir.
+    #[test]
+    fn state_path_is_redirected_in_test_builds() {
+        let path = AppState::state_path().expect("state path resolves");
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "test-build state path must live under temp dir, got {}",
+            path.display()
+        );
+    }
+
     #[test]
     fn cutover_shifts_pre_cutover_into_previous_day() {
         let t1 = Local.with_ymd_and_hms(2026, 5, 13, 3, 0, 0).unwrap();
@@ -432,6 +482,28 @@ mod tests {
         let a = s.add_timer("_a".into(), String::new()).unwrap();
         s.remove_timer(a);
         assert!(s.suppressed_aliases.contains(&"_a".to_string()));
+    }
+
+    #[test]
+    fn clear_all_timers_empties_and_suppresses() {
+        let mut s = AppState::default();
+        let a = s.add_timer("_a".into(), String::new()).unwrap();
+        s.add_timer("_b".into(), String::new()).unwrap();
+        s.start_timer(a, at(9, 0));
+        // "_b" already suppressed once (deleted then re-added) — must not duplicate.
+        s.suppressed_aliases.push("_b".to_owned());
+
+        s.clear_all_timers();
+
+        assert!(s.timers.is_empty());
+        assert!(s.suppressed_aliases.contains(&"_a".to_string()));
+        assert_eq!(
+            s.suppressed_aliases
+                .iter()
+                .filter(|a| a.as_str() == "_b")
+                .count(),
+            1
+        );
     }
 
     #[test]
