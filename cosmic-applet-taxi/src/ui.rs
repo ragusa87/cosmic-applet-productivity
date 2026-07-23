@@ -37,7 +37,7 @@ pub fn popup_view(app: &AppModel) -> Element<'_, Message> {
             .height(Length::Fixed(1.0))
             .width(Length::Fill)
             .style(|theme: &cosmic::Theme| container::Style {
-                background: Some(theme.cosmic().background.divider.into()),
+                background: Some(theme.cosmic().background(false).divider.into()),
                 ..Default::default()
             }),
     );
@@ -269,7 +269,7 @@ fn edit_row<'a>(app: &'a AppModel, t: &'a Timer) -> Element<'a, Message> {
         .padding(4)
         .width(Length::Fill)
         .style(|theme: &cosmic::Theme| container::Style {
-            background: Some(theme.cosmic().background.component.base.into()),
+            background: Some(theme.cosmic().background(false).component.base.into()),
             border: cosmic::iced::Border {
                 radius: cosmic::iced::border::Radius::from(4.0),
                 ..Default::default()

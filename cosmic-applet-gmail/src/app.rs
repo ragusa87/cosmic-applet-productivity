@@ -2,7 +2,7 @@ use cosmic::Element;
 use cosmic::app::Task;
 use cosmic::iced::widget::mouse_area;
 use cosmic::iced::{Limits, Subscription, window::Id};
-use cosmic::surface::{self, action::destroy_popup};
+use cosmic::surface::{self, action::LiveSettings, action::destroy_popup};
 use cosmic::widget::{button, text};
 use cosmic_config::CosmicConfigEntry;
 use futures_util::SinkExt;
@@ -448,6 +448,7 @@ fn sigusr2_subscription() -> Subscription<Message> {
 
 fn open_menu_popup(new_id: Id) -> Task<Message> {
     let action = surface::action::app_popup::<AppModel>(
+        |_| LiveSettings::default(),
         move |state: &mut AppModel| {
             let parent = state.core.main_window_id().unwrap_or(Id::NONE);
             let mut settings = state
