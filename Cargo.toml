@@ -20,9 +20,9 @@ authors = ["Laurent Constantin"]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 configparser = "3"
-dirs = "5"
+dirs = "6"
 futures-util = "0.3"
-keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
+keyring = "4"
 libc = "0.2"
 logind-zbus = { version = "5", default-features = false }
 notify-rust = "4"
@@ -32,7 +32,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shell-words = "1"
-thiserror = "1"
+thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "process", "sync", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

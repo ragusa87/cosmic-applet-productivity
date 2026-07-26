@@ -599,7 +599,7 @@ fn read_existing_section(rc: &Taxirc, date: NaiveDate) -> Option<String> {
 
 fn boxed_panel(theme: &cosmic::Theme) -> container::Style {
     container::Style {
-        background: Some(theme.cosmic().background.component.base.into()),
+        background: Some(theme.cosmic().background(false).component.base.into()),
         border: cosmic::iced::Border {
             radius: cosmic::iced::border::Radius::from(4.0),
             ..Default::default()
