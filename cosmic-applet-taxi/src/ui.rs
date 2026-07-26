@@ -364,6 +364,7 @@ const FOOTER_EXPORT: &str = "\u{2B07}"; // ⬇
 const FOOTER_ADD: &str = "+";
 const FOOTER_SETTINGS: &str = "\u{2699}"; // ⚙
 const FOOTER_REFRESH: &str = "\u{27F3}"; // ⟳ (distinct from ↻ used for Reset)
+const FOOTER_CLEAR: &str = "\u{1F5D1}"; // 🗑
 
 fn footer_row(app: &AppModel) -> Element<'_, Message> {
     let mut row = Row::new().spacing(6).align_y(Alignment::Center);
@@ -396,6 +397,21 @@ fn footer_row(app: &AppModel) -> Element<'_, Message> {
             "Refresh aliases",
             Some(Message::RefreshAliases),
         ));
+    }
+
+    // Two-click confirmation: armed state swaps the icon for an explicit
+    // destructive button so the confirm ask is visible without hovering.
+    // Disabled (no on_press) when there is nothing to clear, keeping the
+    // footer layout stable.
+    if app.pending_clear_all {
+        row = row.push(
+            button::standard("Clear all?")
+                .on_press(Message::ClearAllTimers)
+                .class(cosmic::theme::Button::Destructive),
+        );
+    } else {
+        let clear_press = (!app.state.timers.is_empty()).then_some(Message::ClearAllTimers);
+        row = row.push(icon_button(FOOTER_CLEAR, "Clear all timers", clear_press));
     }
 
     row.into()
