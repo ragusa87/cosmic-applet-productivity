@@ -119,7 +119,11 @@ impl cosmic::Application for AppModel {
         )
         .size(icon_size);
 
-        let worst = worst_used_percent(&self.snapshots, self.config.ignore_credits_when_plan_used);
+        let worst = worst_used_percent(
+            &self.snapshots,
+            self.config.ignore_credits_when_plan_used,
+            self.config.max_includes_scoped,
+        );
         let label_text =
             worst.map_or_else(|| "\u{2026}".to_owned(), |w| format!("{}%", round_pct(w)));
 
@@ -387,10 +391,11 @@ async fn refresh_all(client: &reqwest::Client) -> (Vec<ProviderSnapshot>, Vec<Re
 fn worst_used_percent(
     snapshots: &[ProviderSnapshot],
     ignore_credits_when_plan_used: bool,
+    max_includes_scoped: bool,
 ) -> Option<f64> {
     snapshots
         .iter()
-        .filter_map(|s| s.worst_used(ignore_credits_when_plan_used))
+        .filter_map(|s| s.worst_used(ignore_credits_when_plan_used, max_includes_scoped))
         .fold(None, |acc, x| Some(acc.map_or(x, |a: f64| a.max(x))))
 }
 
@@ -423,6 +428,7 @@ fn open_info_popup(new_id: Id) -> Task<Message> {
                 state.refreshing,
                 state.last_refresh,
                 state.config.ignore_credits_when_plan_used,
+                state.config.max_includes_scoped,
             );
             Element::from(state.core.applet.popup_container(body)).map(cosmic::Action::App)
         })),

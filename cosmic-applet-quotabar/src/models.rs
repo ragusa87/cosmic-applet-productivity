@@ -31,12 +31,25 @@ pub struct SpendInfo {
     pub enabled: bool,
 }
 
+/// A per-model / per-surface usage limit that isn't one of the aggregate
+/// daily/weekly windows — e.g. a weekly cap scoped to a single model such as
+/// Fable. Carried separately so each active one gets its own bar.
+#[derive(Debug, Clone)]
+pub struct ScopedLimit {
+    /// Human label for the bar, e.g. `"FABLE"`.
+    pub label: String,
+    pub used_percent: f64,
+    pub resets_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderSnapshot {
     pub provider: Provider,
     pub short: Option<UsageWindow>,
     pub weekly: Option<UsageWindow>,
     pub spend: Option<SpendInfo>,
+    /// Active scoped limits (per-model/per-surface), each rendered as its own bar.
+    pub scoped: Vec<ScopedLimit>,
 }
 
 impl ProviderSnapshot {
@@ -67,7 +80,18 @@ impl ProviderSnapshot {
     /// Highest usage percentage across the windows, and the credit spend when
     /// it is visible. Credits are folded in exactly when [`Self::visible_spend`]
     /// would show them, so the badge stays consistent with the credit row.
-    pub fn worst_used(&self, ignore_credits_when_plan_used: bool) -> Option<f64> {
+    ///
+    /// When `include_scoped` is set, active per-model/per-surface scoped limits
+    /// also count toward the maximum, so a maxed scoped model can drive the badge.
+    pub fn worst_used(
+        &self,
+        ignore_credits_when_plan_used: bool,
+        include_scoped: bool,
+    ) -> Option<f64> {
+        let scoped = include_scoped
+            .then(|| self.scoped.iter().map(|s| s.used_percent))
+            .into_iter()
+            .flatten();
         [
             self.short.as_ref().map(|w| w.used_percent),
             self.weekly.as_ref().map(|w| w.used_percent),
@@ -76,6 +100,7 @@ impl ProviderSnapshot {
         ]
         .into_iter()
         .flatten()
+        .chain(scoped)
         .fold(None, |acc, x| Some(acc.map_or(x, |a: f64| a.max(x))))
     }
 }
@@ -92,6 +117,14 @@ mod tests {
 
     fn window(used_percent: f64) -> UsageWindow {
         UsageWindow {
+            used_percent,
+            resets_at: None,
+        }
+    }
+
+    fn scoped(label: &str, used_percent: f64) -> ScopedLimit {
+        ScopedLimit {
+            label: label.to_owned(),
             used_percent,
             resets_at: None,
         }
@@ -117,36 +150,37 @@ mod tests {
             short,
             weekly,
             spend,
+            scoped: Vec::new(),
         }
     }
 
     #[test]
     fn worst_used_is_none_without_windows_or_spend() {
-        assert_eq!(snapshot(None, None, None).worst_used(false), None);
+        assert_eq!(snapshot(None, None, None).worst_used(false, false), None);
     }
 
     #[test]
     fn worst_used_takes_max_of_windows() {
         let snap = snapshot(Some(window(30.0)), Some(window(70.0)), None);
-        assert_eq!(snap.worst_used(false), Some(70.0));
+        assert_eq!(snap.worst_used(false, false), Some(70.0));
     }
 
     #[test]
     fn worst_used_includes_enabled_spend() {
         let snap = snapshot(Some(window(30.0)), None, Some(spend(90.0, true)));
-        assert_eq!(snap.worst_used(false), Some(90.0));
+        assert_eq!(snap.worst_used(false, false), Some(90.0));
     }
 
     #[test]
     fn worst_used_ignores_disabled_spend() {
         let snap = snapshot(Some(window(30.0)), None, Some(spend(90.0, false)));
-        assert_eq!(snap.worst_used(false), Some(30.0));
+        assert_eq!(snap.worst_used(false, false), Some(30.0));
     }
 
     #[test]
     fn worst_used_reflects_spend_only_snapshot() {
         let snap = snapshot(None, None, Some(spend(45.0, true)));
-        assert_eq!(snap.worst_used(false), Some(45.0));
+        assert_eq!(snap.worst_used(false, false), Some(45.0));
     }
 
     #[test]
@@ -158,7 +192,7 @@ mod tests {
             Some(window(70.0)),
             Some(spend(90.0, true)),
         );
-        assert_eq!(snap.worst_used(true), Some(70.0));
+        assert_eq!(snap.worst_used(true, false), Some(70.0));
     }
 
     #[test]
@@ -168,14 +202,38 @@ mod tests {
             Some(window(70.0)),
             Some(spend(120.0, true)),
         );
-        assert_eq!(snap.worst_used(true), Some(120.0));
+        assert_eq!(snap.worst_used(true, false), Some(120.0));
     }
 
     #[test]
     fn worst_used_spend_only_hidden_while_setting_on() {
         // No plan windows at all → never maxed → credits stay out of the badge.
         let snap = snapshot(None, None, Some(spend(45.0, true)));
-        assert_eq!(snap.worst_used(true), None);
+        assert_eq!(snap.worst_used(true, false), None);
+    }
+
+    #[test]
+    fn worst_used_excludes_scoped_by_default() {
+        // A maxed scoped limit must NOT drive the badge unless opted in.
+        let mut snap = snapshot(Some(window(30.0)), Some(window(55.0)), None);
+        snap.scoped = vec![scoped("FABLE", 100.0)];
+        assert_eq!(snap.worst_used(false, false), Some(55.0));
+    }
+
+    #[test]
+    fn worst_used_includes_scoped_when_opted_in() {
+        let mut snap = snapshot(Some(window(30.0)), Some(window(55.0)), None);
+        snap.scoped = vec![scoped("FABLE", 100.0)];
+        assert_eq!(snap.worst_used(false, true), Some(100.0));
+    }
+
+    #[test]
+    fn worst_used_scoped_only_when_no_windows() {
+        // Opted in, only a scoped limit present → it becomes the badge.
+        let mut snap = snapshot(None, None, None);
+        snap.scoped = vec![scoped("FABLE", 100.0)];
+        assert_eq!(snap.worst_used(false, true), Some(100.0));
+        assert_eq!(snap.worst_used(false, false), None);
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub fn run() -> iced::Result {
         libc::signal(libc::SIGUSR2, libc::SIG_IGN);
     }
 
-    let settings = cosmic::app::Settings::default().size(Size::new(460.0, 320.0));
+    let settings = cosmic::app::Settings::default().size(Size::new(460.0, 440.0));
     cosmic::app::run::<SettingsApp>(settings, ())
 }
 
@@ -36,6 +36,7 @@ pub enum Msg {
     ToggleEnabled(bool),
     SetThresholdIdx(usize),
     ToggleIgnoreCredits(bool),
+    ToggleMaxIncludesScoped(bool),
     Close,
 }
 
@@ -96,6 +97,17 @@ impl cosmic::Application for SettingsApp {
              window reaches 100%.",
         );
 
+        let badge = settings::section().title("Badge").add(settings::item(
+            "Count per-model limits toward the max badge",
+            toggler(self.config.max_includes_scoped).on_toggle(Msg::ToggleMaxIncludesScoped),
+        ));
+
+        let badge_hint = text::caption(
+            "Lets a maxed per-model limit (e.g. a weekly cap scoped to one model) \
+             drive the percentage shown on the panel icon and card. Per-model limits \
+             always appear as their own bars regardless of this setting.",
+        );
+
         let content = Column::new()
             .padding(12)
             .spacing(10)
@@ -105,6 +117,8 @@ impl cosmic::Application for SettingsApp {
             .push(hint)
             .push(credits)
             .push(credits_hint)
+            .push(badge)
+            .push(badge_hint)
             .push(button::standard("Close").on_press(Msg::Close));
 
         scrollable(content)
@@ -127,6 +141,10 @@ impl cosmic::Application for SettingsApp {
             }
             Msg::ToggleIgnoreCredits(v) => {
                 self.config.ignore_credits_when_plan_used = v;
+                persist_config(&self.config);
+            }
+            Msg::ToggleMaxIncludesScoped(v) => {
+                self.config.max_includes_scoped = v;
                 persist_config(&self.config);
             }
             Msg::Close => return cosmic::iced::exit(),

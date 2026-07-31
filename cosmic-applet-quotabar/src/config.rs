@@ -17,6 +17,10 @@ pub struct Config {
     /// Hide the pay-as-you-go credit row while the plan still has headroom.
     /// The row reappears once the daily or weekly window reaches 100%.
     pub ignore_credits_when_plan_used: bool,
+    /// Let per-model/per-surface scoped limits count toward the "max quota"
+    /// badge (tray label and card badge). They always show as their own bars;
+    /// this only controls whether a maxed scoped limit can drive the badge.
+    pub max_includes_scoped: bool,
 }
 
 impl Default for Config {
@@ -25,6 +29,7 @@ impl Default for Config {
             alert_enabled: true,
             alert_threshold_pct: 90,
             ignore_credits_when_plan_used: false,
+            max_includes_scoped: false,
         }
     }
 }
