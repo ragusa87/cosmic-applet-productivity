@@ -6,7 +6,7 @@ use cosmic::iced::{Alignment, Color, Length};
 use cosmic::widget::{Column, container, text};
 
 use crate::app::Message;
-use crate::models::{ProviderSnapshot, RefreshError, SpendInfo, UsageWindow};
+use crate::models::{ProviderSnapshot, RefreshError, ScopedLimit, SpendInfo, UsageWindow};
 
 const ROW_WIDTH: f32 = 380.0;
 
@@ -25,6 +25,7 @@ pub fn dashboard_view<'a>(
     refreshing: bool,
     last_refresh: Option<DateTime<Utc>>,
     ignore_credits_when_plan_used: bool,
+    max_includes_scoped: bool,
 ) -> Element<'a, Message> {
     let header = Row::new()
         .align_y(Alignment::Center)
@@ -47,7 +48,11 @@ pub fn dashboard_view<'a>(
         }));
     } else {
         for snapshot in snapshots {
-            col = col.push(provider_card(snapshot, ignore_credits_when_plan_used));
+            col = col.push(provider_card(
+                snapshot,
+                ignore_credits_when_plan_used,
+                max_includes_scoped,
+            ));
         }
         for err in errors {
             col = col.push(warning_banner(err));
@@ -61,6 +66,7 @@ pub fn dashboard_view<'a>(
 fn provider_card(
     snapshot: &ProviderSnapshot,
     ignore_credits_when_plan_used: bool,
+    max_includes_scoped: bool,
 ) -> Element<'_, Message> {
     let now = chrono::Utc::now();
 
@@ -74,13 +80,20 @@ fn provider_card(
                 .height(Length::Fixed(0.0)),
         )
         .push(
-            text::body(worst_badge(snapshot, ignore_credits_when_plan_used))
-                .font(cosmic::font::bold()),
+            text::body(worst_badge(
+                snapshot,
+                ignore_credits_when_plan_used,
+                max_includes_scoped,
+            ))
+            .font(cosmic::font::bold()),
         );
 
     let mut col = Column::new().padding(10).spacing(8).push(header);
     col = col.push(bar_row("DAILY", snapshot.short.as_ref(), now));
     col = col.push(bar_row("WEEKLY", snapshot.weekly.as_ref(), now));
+    for limit in &snapshot.scoped {
+        col = col.push(scoped_row(limit, now));
+    }
     if let Some(spend) = snapshot.visible_spend(ignore_credits_when_plan_used) {
         col = col.push(spend_row(spend));
     }
@@ -126,9 +139,13 @@ fn spend_row(spend: &SpendInfo) -> Element<'_, Message> {
         .into()
 }
 
-fn worst_badge(snapshot: &ProviderSnapshot, ignore_credits_when_plan_used: bool) -> String {
+fn worst_badge(
+    snapshot: &ProviderSnapshot,
+    ignore_credits_when_plan_used: bool,
+    max_includes_scoped: bool,
+) -> String {
     snapshot
-        .worst_used(ignore_credits_when_plan_used)
+        .worst_used(ignore_credits_when_plan_used, max_includes_scoped)
         .map_or_else(|| "—".to_owned(), |w| format!("{}%", round_pct(w)))
 }
 
@@ -166,6 +183,45 @@ fn bar_row<'a>(
         .spacing(10)
         .width(Length::Fixed(ROW_WIDTH))
         .push(text::caption(label).width(Length::Fixed(56.0)))
+        .push(bar)
+        .push(
+            text::caption(pct_text)
+                .width(Length::Fixed(44.0))
+                .align_x(cosmic::iced::alignment::Horizontal::Right),
+        )
+        .push(
+            text::caption(reset_text)
+                .width(Length::Fixed(72.0))
+                .align_x(cosmic::iced::alignment::Horizontal::Right),
+        )
+        .into()
+}
+
+// A per-model/per-surface limit bar. Same layout as `bar_row`, but the label
+// comes from the limit itself and the data is always present.
+fn scoped_row<'a>(limit: &'a ScopedLimit, now: DateTime<Utc>) -> Element<'a, Message> {
+    let pct_text = format!("{}%", round_pct(limit.used_percent));
+    let reset_text = limit
+        .resets_at
+        .map(|r| {
+            format!(
+                "in {}",
+                short_duration(r.signed_duration_since(now).num_seconds())
+            )
+        })
+        .unwrap_or_default();
+
+    let bar = canvas(BarProgram {
+        used_percent: limit.used_percent,
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(10.0));
+
+    Row::new()
+        .align_y(Alignment::Center)
+        .spacing(10)
+        .width(Length::Fixed(ROW_WIDTH))
+        .push(text::caption(limit.label.as_str()).width(Length::Fixed(56.0)))
         .push(bar)
         .push(
             text::caption(pct_text)

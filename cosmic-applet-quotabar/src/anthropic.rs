@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::atomic;
-use crate::models::{Provider, ProviderSnapshot, SpendInfo, UsageWindow};
+use crate::models::{Provider, ProviderSnapshot, ScopedLimit, SpendInfo, UsageWindow};
 
 const USAGE_ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
 const REFRESH_ENDPOINT: &str = "https://platform.claude.com/v1/oauth/token";
@@ -156,6 +156,40 @@ struct UsageResponse {
     seven_day: Option<UsageWindowPayload>,
     #[serde(default)]
     spend: Option<SpendPayload>,
+    // Per-model/per-surface limits (e.g. a weekly cap scoped to Fable). The
+    // aggregate daily/weekly windows above don't reflect these.
+    #[serde(default)]
+    limits: Vec<LimitPayload>,
+}
+
+// One entry in the response `limits` array. All fields optional/defaulted so a
+// reshaped or partial entry never breaks parsing of the rest.
+#[derive(Debug, Deserialize)]
+struct LimitPayload {
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    percent: Option<f64>,
+    #[serde(default)]
+    resets_at: Option<String>,
+    #[serde(default)]
+    is_active: bool,
+    #[serde(default)]
+    scope: Option<LimitScope>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LimitScope {
+    #[serde(default)]
+    model: Option<LimitScopeModel>,
+    #[serde(default)]
+    surface: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LimitScopeModel {
+    #[serde(default)]
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +258,32 @@ fn map_spend(payload: &SpendPayload) -> Option<SpendInfo> {
     })
 }
 
+// Turn the raw `limits` array into display models. We keep only *active*,
+// *scoped* limits: entries with a `scope` (per-model or per-surface). The
+// unscoped `session`/`weekly_all` entries are dropped because they duplicate
+// the aggregate DAILY/WEEKLY bars we already show.
+fn map_scoped_limits(limits: &[LimitPayload]) -> Vec<ScopedLimit> {
+    limits
+        .iter()
+        .filter(|l| l.is_active)
+        .filter_map(|l| {
+            let scope = l.scope.as_ref()?;
+            let label = scope
+                .model
+                .as_ref()
+                .and_then(|m| m.display_name.as_deref())
+                .or(scope.surface.as_deref())
+                .map(str::to_uppercase)
+                .or_else(|| l.kind.clone())?;
+            Some(ScopedLimit {
+                label,
+                used_percent: l.percent.unwrap_or(0.0),
+                resets_at: l.resets_at.as_deref().and_then(parse_iso),
+            })
+        })
+        .collect()
+}
+
 fn parse_iso(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .ok()
@@ -249,7 +309,10 @@ async fn fetch_usage(client: &reqwest::Client, access_token: &str) -> Result<Usa
         let body = response.text().await.unwrap_or_default();
         return Err(anyhow!("Anthropic usage HTTP {status}: {body}"));
     }
-    let parsed: UsageResponse = response.json().await?;
+    let body = response.text().await?;
+    tracing::debug!(body = %body, "Anthropic usage raw response");
+    let parsed: UsageResponse = serde_json::from_str(&body)
+        .with_context(|| format!("failed to parse Anthropic usage response: {body}"))?;
     Ok(parsed)
 }
 
@@ -302,12 +365,14 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
     });
 
     let spend = usage.spend.as_ref().and_then(map_spend);
+    let scoped = map_scoped_limits(&usage.limits);
 
     Ok(ProviderSnapshot {
         provider: Provider::Anthropic,
         short,
         weekly,
         spend,
+        scoped,
     })
 }
 
@@ -448,6 +513,75 @@ mod tests {
         };
         let spend = map_spend(&payload).expect("mapped");
         assert!(!spend.enabled); // UI hides it, but the mapping succeeds
+    }
+
+    #[test]
+    fn scoped_limits_keep_only_active_scoped_entries() {
+        // Live `limits` array: session + weekly_all are unscoped (drop them),
+        // weekly_scoped is a per-model Fable cap that is active (keep it).
+        let json = r#"{
+            "limits": [
+                {"kind":"session","group":"session","percent":37,"resets_at":"2026-07-31T12:20:00+00:00","scope":null,"is_active":false},
+                {"kind":"weekly_all","group":"weekly","percent":54,"resets_at":"2026-08-04T22:00:00+00:00","scope":null,"is_active":false},
+                {"kind":"weekly_scoped","group":"weekly","percent":100,"resets_at":"2026-08-04T22:00:00+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null},"is_active":true}
+            ]
+        }"#;
+        let usage: UsageResponse = serde_json::from_str(json).expect("parse");
+        let scoped = map_scoped_limits(&usage.limits);
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].label, "FABLE");
+        assert!(approx(scoped[0].used_percent, 100.0));
+        assert!(scoped[0].resets_at.is_some());
+    }
+
+    #[test]
+    fn scoped_limit_falls_back_to_surface_then_kind() {
+        // No model, but a surface → label from surface.
+        let surface = LimitPayload {
+            kind: Some("weekly_scoped".to_owned()),
+            percent: Some(80.0),
+            resets_at: None,
+            is_active: true,
+            scope: Some(LimitScope {
+                model: None,
+                surface: Some("code".to_owned()),
+            }),
+        };
+        assert_eq!(map_scoped_limits(&[surface])[0].label, "CODE");
+    }
+
+    #[test]
+    fn scoped_limits_drop_inactive_and_unscoped() {
+        let inactive = LimitPayload {
+            kind: Some("weekly_scoped".to_owned()),
+            percent: Some(90.0),
+            resets_at: None,
+            is_active: false,
+            scope: Some(LimitScope {
+                model: Some(LimitScopeModel {
+                    display_name: Some("Opus".to_owned()),
+                }),
+                surface: None,
+            }),
+        };
+        let unscoped = LimitPayload {
+            kind: Some("weekly_all".to_owned()),
+            percent: Some(54.0),
+            resets_at: None,
+            is_active: true,
+            scope: None,
+        };
+        assert!(map_scoped_limits(&[inactive, unscoped]).is_empty());
+    }
+
+    #[test]
+    fn response_without_limits_still_parses() {
+        // `limits` absent entirely → empty vec, no panic.
+        let json = r#"{
+            "five_hour": { "utilization": 12.0, "resets_at": "2026-07-02T11:40:00+00:00" }
+        }"#;
+        let usage: UsageResponse = serde_json::from_str(json).expect("parse");
+        assert!(map_scoped_limits(&usage.limits).is_empty());
     }
 
     #[test]

@@ -285,5 +285,6 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
         short,
         weekly,
         spend: None,
+        scoped: Vec::new(),
     })
 }
