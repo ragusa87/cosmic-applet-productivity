@@ -1,9 +1,10 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, NaiveDateTime, Timelike, Utc};
 use cosmic::Element;
 use cosmic::applet::menu_button;
 use cosmic::iced::widget::{Row, canvas};
 use cosmic::iced::{Alignment, Color, Length};
 use cosmic::widget::{Column, container, text};
+use cosmic_config::ConfigGet;
 
 use crate::app::Message;
 use crate::models::{ProviderSnapshot, RefreshError, ScopedLimit, SpendInfo, UsageWindow};
@@ -69,6 +70,7 @@ fn provider_card(
     max_includes_scoped: bool,
 ) -> Element<'_, Message> {
     let now = chrono::Utc::now();
+    let military = military_time();
 
     let header = Row::new()
         .align_y(Alignment::Center)
@@ -89,10 +91,10 @@ fn provider_card(
         );
 
     let mut col = Column::new().padding(10).spacing(8).push(header);
-    col = col.push(bar_row("DAILY", snapshot.short.as_ref(), now));
-    col = col.push(bar_row("WEEKLY", snapshot.weekly.as_ref(), now));
+    col = col.push(bar_row("DAILY", snapshot.short.as_ref(), now, military));
+    col = col.push(bar_row("WEEKLY", snapshot.weekly.as_ref(), now, military));
     for limit in &snapshot.scoped {
-        col = col.push(scoped_row(limit, now));
+        col = col.push(scoped_row(limit, now, military));
     }
     if let Some(spend) = snapshot.visible_spend(ignore_credits_when_plan_used) {
         col = col.push(spend_row(spend));
@@ -158,6 +160,7 @@ fn bar_row<'a>(
     label: &'a str,
     window: Option<&'a UsageWindow>,
     now: DateTime<Utc>,
+    military: bool,
 ) -> Element<'a, Message> {
     let pct_text = window.map_or_else(
         || "—".to_owned(),
@@ -165,12 +168,7 @@ fn bar_row<'a>(
     );
     let reset_text = window
         .and_then(|w| w.resets_at)
-        .map(|r| {
-            format!(
-                "in {}",
-                short_duration(r.signed_duration_since(now).num_seconds())
-            )
-        })
+        .map(|r| time_reset_label(r, now, military))
         .unwrap_or_default();
 
     let used = window.map_or(0.0, |w| w.used_percent);
@@ -199,16 +197,15 @@ fn bar_row<'a>(
 
 // A per-model/per-surface limit bar. Same layout as `bar_row`, but the label
 // comes from the limit itself and the data is always present.
-fn scoped_row<'a>(limit: &'a ScopedLimit, now: DateTime<Utc>) -> Element<'a, Message> {
+fn scoped_row<'a>(
+    limit: &'a ScopedLimit,
+    now: DateTime<Utc>,
+    military: bool,
+) -> Element<'a, Message> {
     let pct_text = format!("{}%", round_pct(limit.used_percent));
     let reset_text = limit
         .resets_at
-        .map(|r| {
-            format!(
-                "in {}",
-                short_duration(r.signed_duration_since(now).num_seconds())
-            )
-        })
+        .map(|r| time_reset_label(r, now, military))
         .unwrap_or_default();
 
     let bar = canvas(BarProgram {
@@ -257,6 +254,60 @@ fn refresh_button<'a>(refreshing: bool) -> Element<'a, Message> {
     cosmic::widget::button::standard(label)
         .on_press(Message::Refresh)
         .into()
+}
+
+/// COSMIC's system-wide clock preference (24-hour vs 12-hour), read from the
+/// time applet's config so we match the rest of the desktop. Defaults to
+/// 12-hour — the same default COSMIC itself uses — when the key is absent.
+fn military_time() -> bool {
+    cosmic_config::Config::new("com.system76.CosmicAppletTime", 1)
+        .and_then(|cfg| cfg.get::<bool>("military_time"))
+        .unwrap_or(false)
+}
+
+/// Human-friendly label for when a quota window resets.
+///
+/// Within 12h we show a relative countdown ("in 6h"), which is the most
+/// intuitive framing when the reset is imminent. Beyond that a countdown like
+/// "in 34h" is hard to map onto a real moment, so we switch to an absolute
+/// local weekday + time ("Mon 10am" or "Mon 13h", per the system clock format).
+fn time_reset_label(resets_at: DateTime<Utc>, now: DateTime<Utc>, military: bool) -> String {
+    let seconds = resets_at.signed_duration_since(now).num_seconds();
+    if seconds < 12 * 60 * 60 {
+        format!("in {}", short_duration(seconds))
+    } else {
+        absolute_reset(resets_at.with_timezone(&Local).naive_local(), military)
+    }
+}
+
+/// Format a local datetime as a short weekday + time. With `military` we use a
+/// 24-hour clock ("Mon 13h" / "Mon 13:30"), zero-padded so midnight reads as
+/// "Mon 00h" rather than the confusing "Mon 0h"; otherwise a 12-hour clock with
+/// a meridiem ("Mon 10am" / "Mon 10:30am"). Kept pure (no timezone or config
+/// lookup) so it is easy to test.
+fn absolute_reset(local: NaiveDateTime, military: bool) -> String {
+    let weekday = local.format("%a");
+    let minute = local.minute();
+    if military {
+        let hour = local.hour();
+        if minute == 0 {
+            format!("{weekday} {hour:02}h")
+        } else {
+            format!("{weekday} {hour:02}:{minute:02}")
+        }
+    } else {
+        let (hour12, meridiem) = match local.hour() {
+            0 => (12, "am"),
+            h @ 1..=11 => (h, "am"),
+            12 => (12, "pm"),
+            h => (h - 12, "pm"),
+        };
+        if minute == 0 {
+            format!("{weekday} {hour12}{meridiem}")
+        } else {
+            format!("{weekday} {hour12}:{minute:02}{meridiem}")
+        }
+    }
 }
 
 fn short_duration(seconds: i64) -> String {
@@ -371,5 +422,75 @@ mod tests {
             enabled: true,
         };
         assert_eq!(spend_label(&spend), "$38.77");
+    }
+
+    fn dt(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    fn naive(s: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap()
+    }
+
+    #[test]
+    fn reset_label_uses_relative_within_12h() {
+        let now = dt("2026-08-04T10:00:00Z");
+        assert_eq!(
+            time_reset_label(dt("2026-08-04T16:00:00Z"), now, true),
+            "in 6h"
+        );
+        assert_eq!(
+            time_reset_label(dt("2026-08-04T10:30:00Z"), now, true),
+            "in 30m"
+        );
+    }
+
+    #[test]
+    fn reset_label_switches_to_absolute_beyond_12h() {
+        let now = dt("2026-08-04T10:00:00Z");
+        // 18h ahead is no longer "in 18h"; it becomes a weekday + time.
+        let label = time_reset_label(dt("2026-08-05T04:00:00Z"), now, true);
+        assert!(!label.starts_with("in "), "got {label}");
+    }
+
+    #[test]
+    fn absolute_reset_24h_format() {
+        // 2026-08-04 is a Tuesday.
+        assert_eq!(
+            absolute_reset(naive("2026-08-04 13:00:00"), true),
+            "Tue 13h"
+        );
+        assert_eq!(
+            absolute_reset(naive("2026-08-04 13:30:00"), true),
+            "Tue 13:30"
+        );
+        assert_eq!(
+            absolute_reset(naive("2026-08-04 00:00:00"), true),
+            "Tue 00h"
+        );
+        assert_eq!(
+            absolute_reset(naive("2026-08-04 09:05:00"), true),
+            "Tue 09:05"
+        );
+    }
+
+    #[test]
+    fn absolute_reset_12h_format() {
+        assert_eq!(
+            absolute_reset(naive("2026-08-04 10:00:00"), false),
+            "Tue 10am"
+        );
+        assert_eq!(
+            absolute_reset(naive("2026-08-04 22:30:00"), false),
+            "Tue 10:30pm"
+        );
+        assert_eq!(
+            absolute_reset(naive("2026-08-04 00:00:00"), false),
+            "Tue 12am"
+        );
+        assert_eq!(
+            absolute_reset(naive("2026-08-04 12:15:00"), false),
+            "Tue 12:15pm"
+        );
     }
 }
