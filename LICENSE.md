@@ -23,8 +23,8 @@ Copyright (C) 2026 Laurent Constantin
 The `cosmic-applet-quotabar` crate is **MIT-licensed** rather than
 GPL-3.0-or-later, to match its upstream project. It is a Rust /
 libcosmic port of the Swift
-[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project
-(formerly known as `QuotaBar`) by Jonathan M. See
+[`QuotaBar`](https://github.com/Jonathanm10/QuotaBar) project
+by Jonathan M. See
 [`cosmic-applet-quotabar/LICENSE`](cosmic-applet-quotabar/LICENSE) for
 the full text and copyright notices.
 

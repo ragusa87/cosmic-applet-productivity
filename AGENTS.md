@@ -9,7 +9,7 @@ A Cargo workspace bundling several COSMIC desktop panel applets — some
 share OAuth + Secret Service plumbing for Google APIs, others are
 standalone (a time tracker, a read-only DBus reflector for Slack's tray
 icon, an MIT-licensed Rust port of the Swift
-[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project for
+[`QuotaBar`](https://github.com/Jonathanm10/QuotaBar) project for
 AI API quota tracking, and more):
 
 - **`cosmic-applet-gmail`** — Gmail unread count, polls every N seconds.
@@ -28,7 +28,7 @@ AI API quota tracking, and more):
   the local OAuth sessions Claude Code and Codex CLIs already maintain
   (`~/.claude/.credentials.json`, `~/.codex/auth.json`), refreshes them
   when expired, and hits each provider's usage endpoint. Port of the
-  Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project
+  Swift [`QuotaBar`](https://github.com/Jonathanm10/QuotaBar) project
   by Jonathan M.; **MIT-licensed** (the rest of the workspace is
   GPL-3.0-or-later) — preserve that exception when editing this crate.
 - **`cosmic-applet-windowrules`** — KDE-style window→workspace rules,
@@ -727,12 +727,12 @@ src/
 - **APP_ID**: `com.github.ragusa87.CosmicAppletQuotaBar`
 - **License**: **MIT** (Cargo.toml override; the workspace default is
   GPL-3.0-or-later). Matches upstream
-  [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) by
+  [`QuotaBar`](https://github.com/Jonathanm10/QuotaBar) by
   Jonathan M. The MIT text + both copyrights live in
   `cosmic-applet-quotabar/LICENSE`; the workspace `LICENSE.md` documents
   the per-crate exception. **Do not** flip this crate to GPL or change
   the `license` field without coordinating with the upstream author.
-- **Provenance**: Rust port of `mr-chatter` (formerly `QuotaBar`), a
+- **Provenance**: Rust port of `QuotaBar`, a
   Swift / SwiftUI macOS menu-bar app. The mapping is direct:
   Swift `QuotaBarCore::AnthropicProvider` → `src/anthropic.rs`,
   `QuotaBarCore::OpenAIProvider` → `src/openai.rs`,
@@ -822,7 +822,7 @@ src/
 
 - **Treat upstream as the spec.** The endpoints, headers, client IDs,
   refresh semantics, and JSON shape decisions all come from
-  [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter). When in
+  [`QuotaBar`](https://github.com/Jonathanm10/QuotaBar). When in
   doubt about how a corner case should behave (e.g. how to merge a
   401 retry with a proactive refresh), check the Swift sources first.
   Drifting behavior is a port bug, not a feature.
@@ -995,7 +995,7 @@ cosmic-applet-…` and the panel respawns it. Then:
 - Don't flip `cosmic-applet-quotabar` from MIT to the workspace's
   GPL-3.0-or-later license, and don't switch its `Cargo.toml` `license`
   field to `license.workspace = true`. That crate is a port of
-  [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter), which is
+  [`QuotaBar`](https://github.com/Jonathanm10/QuotaBar), which is
   MIT — relicensing the port unilaterally would breach upstream's
   terms. Keep the per-crate MIT license + the upstream copyright
   notice in `cosmic-applet-quotabar/LICENSE`.

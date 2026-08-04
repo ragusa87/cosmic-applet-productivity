@@ -13,7 +13,7 @@ A bundle of COSMIC desktop panel applets:
 | [Next meeting](#google-agenda-applet) | `cosmic-applet-google-agenda` | Next Google Calendar event with a live countdown, plus a desktop notification a few minutes before it starts. Requires a [Google Cloud OAuth client](#one-time-google-cloud-setup) (you create the access token). |![calendar-preview.png](cosmic-applet-google-agenda/calendar-preview.png)|
 | [Taxi tracker](#taxi-tracker-applet) | `cosmic-applet-taxi` | Multi-timer time tracking with daily auto-export to [`taxi`](https://github.com/sephii/taxi) (e.g. Liip's Zebra). |![taxi-preview.png](cosmic-applet-taxi/taxi-preview.png)|
 | [Slack Unread](#slack-applet) | `cosmic-applet-slack` | Badge mirroring Slack's tray-icon ToolTip — pulled over DBus, no Slack API, no token. |![slack-preview.png](cosmic-applet-slack/slack-preview.png)|
-| [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project, MIT-licensed. |![quotabar-preview.png](cosmic-applet-quotabar/quotabar-preview.png)|
+| [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`QuotaBar`](https://github.com/Jonathanm10/QuotaBar) project, MIT-licensed. |![quotabar-preview.png](cosmic-applet-quotabar/quotabar-preview.png)|
 | [Window Rules](#window-rules-applet) | `cosmic-applet-windowrules` | Assigns windows to a chosen workspace by `app_id` on first appearance — COSMIC counterpart of KDE's KWin Window Rules. |![windowrules-preview.png](cosmic-applet-windowrules/windowrules-preview.png)|
 
 Jump to a per-applet section below for what each one shows, how to
@@ -417,8 +417,8 @@ COSMIC panel as usual. Nothing else.
 ## QuotaBar applet
 
 `cosmic-applet-quotabar` is a Rust / libcosmic port of the Swift
-[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project
-(formerly `QuotaBar`) by Jonathan M. It shows your remaining
+[`QuotaBar`](https://github.com/Jonathanm10/QuotaBar) project
+by Jonathan M. It shows your remaining
 **OpenAI** + **Anthropic** API quotas in the COSMIC panel by reading
 the local OAuth sessions that the Claude Code and Codex CLIs already
 maintain — **no extra credentials, no API keys, no Google Cloud
@@ -635,7 +635,7 @@ cosmic-applet-productivity/
 ├── cosmic-applet-google-agenda/     # Next meeting applet
 ├── cosmic-applet-taxi/              # Time tracker + taxi/Zebra exporter
 ├── cosmic-applet-slack/             # Slack unread badge via DBus tray ToolTip
-├── cosmic-applet-quotabar/          # OpenAI + Anthropic API quota bar (MIT-licensed port of mr-chatter)
+├── cosmic-applet-quotabar/          # OpenAI + Anthropic API quota bar (MIT-licensed port of QuotaBar)
 └── cosmic-applet-windowrules/       # Assign windows to workspaces by app id on first appearance
 ```
 
@@ -643,7 +643,7 @@ cosmic-applet-productivity/
 
 Source code: GPL-3.0-or-later, **except** `cosmic-applet-quotabar/`
 which is MIT-licensed to match its upstream
-[`mr-chatter`](https://github.com/Jonathanm10/mr-chatter) project. See
+[`QuotaBar`](https://github.com/Jonathanm10/QuotaBar) project. See
 [LICENSE.md](LICENSE.md) for the full workspace notice (including the
 per-crate exception and icon attribution: CC0 1.0 Universal, Simple
 Icons), and
