@@ -385,8 +385,35 @@ indicator; nothing else matches → no badge.
 
 - **Left-click** runs `xdg-open slack:` (Slack registers this URL
   scheme handler on install — typically focuses the existing window).
+  Whether the window actually comes to the foreground depends on
+  COSMIC's focus-stealing setting — see the note below.
 - **Right-click** opens a one-item menu with **Refresh** (same effect
   as `pkill -USR2 -f cosmic-applet-slack`).
+
+**Left-click doesn't switch to Slack** — `xdg-open slack:` asks Slack
+to raise itself through the **xdg-activation** protocol. COSMIC gates
+that request on
+`~/.config/cosmic/com.system76.CosmicComp/v1/activation_policy`:
+
+| `activation_policy` | Effect of a click / `xdg-open slack:`       |
+|---------------------|---------------------------------------------|
+| `Steal`             | Window is raised and focused.               |
+| `Urgent`            | Window is only flagged *urgent* (its panel/app-tray icon flashes) — it does **not** come forward. |
+| `Ignore`            | Request is dropped entirely.                |
+
+If clicking just flashes the tray icon instead of switching, the value
+is `Urgent`. Restore switch-on-click by setting it to `Steal` (COSMIC
+picks up the change instantly — no logout needed):
+
+```sh
+echo Steal > ~/.config/cosmic/com.system76.CosmicComp/v1/activation_policy
+```
+
+The COSMIC **app tray** keeps working under any policy because it does
+*not* use xdg-activation — it calls the privileged
+`zcosmic_toplevel_manager_v1::activate` request. (This applet could
+adopt the same protocol to become policy-independent; the plumbing
+already exists in `cosmic-applet-windowrules/src/wayland.rs`.)
 
 **Debugging what the panel sees** — run with `--debug` to print the
 full fetch pipeline once and exit:
