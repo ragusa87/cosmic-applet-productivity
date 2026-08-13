@@ -4,7 +4,7 @@ use cosmic::Element;
 use cosmic::app::Task;
 use cosmic::iced::{self, Alignment, Length, Size, Subscription};
 use cosmic::widget::{
-    Column, Row, button, container, dropdown, scrollable, text, text_input, toggler,
+    Column, Row, button, container, dropdown, scrollable, spin_button, text, text_input, toggler,
 };
 use uuid::Uuid;
 
@@ -142,6 +142,9 @@ pub enum Msg {
     },
     OpenWorkspaceOverview,
     OverviewResult(Result<(), String>),
+    ToggleCapEnabled(bool),
+    CapMaxWindows(u32),
+    ToggleCapOnlyPlaceNew(bool),
 }
 
 impl cosmic::Application for SettingsApp {
@@ -225,6 +228,7 @@ impl cosmic::Application for SettingsApp {
             .push(header)
             .push(sub)
             .push(rules_card)
+            .push(experimental_card(&self.config))
             .push(pin_workspace_tip());
 
         if form_open {
@@ -307,6 +311,18 @@ impl cosmic::Application for SettingsApp {
             Msg::OverviewResult(Err(e)) => {
                 self.status = Some(Status::error(format!("Failed to open overview: {e}")));
             }
+            Msg::ToggleCapEnabled(v) => {
+                self.config.cap_enabled = v;
+                self.save_config();
+            }
+            Msg::CapMaxWindows(v) => {
+                self.config.cap_max_windows = v.max(1);
+                self.save_config();
+            }
+            Msg::ToggleCapOnlyPlaceNew(v) => {
+                self.config.cap_only_place_new = v;
+                self.save_config();
+            }
         }
         Task::none()
     }
@@ -356,6 +372,12 @@ impl SettingsApp {
             ws.push(c.label.clone());
         }
         self.workspace_labels = ws;
+    }
+
+    fn save_config(&mut self) {
+        if let Err(e) = self.config.save() {
+            self.status = Some(Status::error(format!("Save failed: {e}")));
+        }
     }
 
     fn editing_rule(&self) -> Option<&Rule> {
@@ -657,6 +679,55 @@ fn labeled_picker<'a>(label: &'a str, picker: Element<'a, Msg>) -> Element<'a, M
         .push(picker);
     container(inner)
         .padding(8)
+        .width(Length::Fill)
+        .class(cosmic::theme::Container::Card)
+        .into()
+}
+
+fn experimental_card(config: &Config) -> Element<'_, Msg> {
+    let heading = text::heading("Experimental");
+    let enable_toggle = toggler(config.cap_enabled)
+        .label("Cap windows per workspace".to_owned())
+        .on_toggle(Msg::ToggleCapEnabled);
+    let caption = text::caption(
+        "New windows are placed on the first workspace with a free slot and \
+         focused; when a workspace empties, the following workspaces shift \
+         down as whole groups so no gaps are left. While enabled, the rules \
+         above are NOT applied.",
+    );
+
+    let mut inner = Column::new().spacing(8).push(heading).push(enable_toggle);
+    if config.cap_enabled {
+        // spin_button's `label` is the text shown between the -/+ buttons,
+        // i.e. the formatted value — the description goes in the row instead.
+        let max_spin = Row::new()
+            .align_y(Alignment::Center)
+            .spacing(8)
+            .push(text::body("Maximum windows per workspace").width(Length::Fill))
+            .push(spin_button(
+                config.cap_max_windows.max(1).to_string(),
+                config.cap_max_windows.max(1),
+                1,
+                1,
+                20,
+                Msg::CapMaxWindows,
+            ));
+        let place_only_toggle = toggler(config.cap_only_place_new)
+            .label("Only place new windows".to_owned())
+            .on_toggle(Msg::ToggleCapOnlyPlaceNew);
+        let place_only_caption = text::caption(
+            "Never reposition existing windows to enforce the cap — windows \
+             you move or stack yourself are left alone. Empty-workspace gaps \
+             are still compacted.",
+        );
+        inner = inner
+            .push(max_spin)
+            .push(place_only_toggle)
+            .push(place_only_caption);
+    }
+    inner = inner.push(caption);
+    container(inner)
+        .padding(12)
         .width(Length::Fill)
         .class(cosmic::theme::Container::Card)
         .into()

@@ -23,6 +23,7 @@ pub struct AppModel {
     caps: ManagerCaps,
     sender: Option<WlSender>,
     menu_popup: Option<Id>,
+    cap: crate::cap::CapPlanner,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +63,7 @@ impl cosmic::Application for AppModel {
                 caps: ManagerCaps::empty(),
                 sender: None,
                 menu_popup: None,
+                cap: crate::cap::CapPlanner::default(),
             },
             Task::none(),
         )
@@ -147,7 +149,25 @@ impl cosmic::Application for AppModel {
                 tracing::warn!(error = %e, "failed to open workspace overview");
             }
             Message::UpdateConfig(config) => {
+                let cap_changed = (
+                    self.config.cap_enabled,
+                    self.config.cap_max_windows,
+                    self.config.cap_only_place_new,
+                ) != (
+                    config.cap_enabled,
+                    config.cap_max_windows,
+                    config.cap_only_place_new,
+                );
                 self.config = config;
+                if cap_changed {
+                    // Drop queue/in-flight state from the previous settings;
+                    // when (still) enabled, immediately converge under the
+                    // new ones (e.g. re-pack existing stacked windows).
+                    self.cap.reset();
+                    if self.config.cap_enabled {
+                        self.run_cap_step();
+                    }
+                }
             }
             Message::NoOp => {}
         }
@@ -180,6 +200,9 @@ impl AppModel {
                     toplevels = self.toplevels.len(),
                     "applet: snapshot received"
                 );
+                if self.config.cap_enabled {
+                    self.run_cap_step();
+                }
             }
             WlEvent::NewToplevel(snap) => {
                 // Upsert into self.toplevels so "Apply all rules" sees the
@@ -193,7 +216,14 @@ impl AppModel {
                 } else {
                     self.toplevels.push(snap.clone());
                 }
-                self.handle_new_toplevel(&snap);
+                if self.config.cap_enabled {
+                    // Experimental cap mode fully overrides rules: the window
+                    // is queued for capacity-based placement instead.
+                    self.cap.note_new(&snap.identifier);
+                    self.run_cap_step();
+                } else {
+                    self.handle_new_toplevel(&snap);
+                }
             }
         }
         Task::none()
@@ -243,6 +273,46 @@ impl AppModel {
                 workspace: target,
                 output,
             });
+        }
+    }
+
+    /// Advance the "cap windows per workspace" convergence loop by one batch
+    /// of moves. Called on every snapshot (and on new-toplevel/enable) while
+    /// the experimental option is on; each executed batch produces a fresh
+    /// snapshot, which drives the next step.
+    fn run_cap_step(&mut self) {
+        let opts = crate::cap::CapOptions {
+            max_windows: self.config.cap_max_windows.max(1),
+            only_place_new: self.config.cap_only_place_new,
+        };
+        let moves = self.cap.step(&self.toplevels, &self.workspaces, &opts);
+        if moves.is_empty() {
+            return;
+        }
+        let Some(sender) = self.sender.as_ref() else {
+            tracing::warn!("cap: no wayland sender; cannot dispatch moves");
+            return;
+        };
+        for mv in moves {
+            tracing::info!(
+                identifier = %mv.identifier,
+                target_index = mv.target_index,
+                output = ?mv.output,
+                activate = mv.activate,
+                "cap: moving window"
+            );
+            let workspace = WorkspaceRef::Index(mv.target_index);
+            sender.send(WlCommand::MoveToplevelToWorkspace {
+                toplevel: crate::wayland::ToplevelRef(mv.identifier),
+                workspace: workspace.clone(),
+                output: mv.output.clone(),
+            });
+            if mv.activate {
+                sender.send(WlCommand::ActivateWorkspace {
+                    workspace,
+                    output: mv.output,
+                });
+            }
         }
     }
 

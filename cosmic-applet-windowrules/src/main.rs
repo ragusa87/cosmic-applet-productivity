@@ -1,5 +1,6 @@
 mod app;
 mod apply;
+mod cap;
 mod config;
 mod dbus;
 mod debug;

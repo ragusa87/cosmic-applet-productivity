@@ -41,9 +41,17 @@ pub fn run() {
                         );
                     }
                     for t in &toplevels {
+                        let on: Vec<String> = t
+                            .workspaces
+                            .iter()
+                            .map(|w| format!("{:?}#{}", w.output_name, w.index))
+                            .collect();
                         println!(
-                            "  toplevel  app_id={:?} title={:?} id={:?}",
-                            t.app_id, t.title, t.identifier
+                            "  toplevel  app_id={:?} title={:?} id={:?} on=[{}]",
+                            t.app_id,
+                            t.title,
+                            t.identifier,
+                            on.join(", ")
                         );
                     }
                 }
