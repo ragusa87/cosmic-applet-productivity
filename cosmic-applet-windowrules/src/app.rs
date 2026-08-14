@@ -5,6 +5,7 @@ use cosmic::iced::{Limits, Subscription, window::Id};
 use cosmic::surface::{self, action::LiveSettings, action::destroy_popup};
 use cosmic::widget::{Column, button, text};
 
+use crate::cap_exceptions::{ExceptionMatcher, cap_exempt};
 use crate::config::{APP_ID, Config};
 use crate::models::Rule;
 use crate::wayland::{
@@ -24,6 +25,8 @@ pub struct AppModel {
     sender: Option<WlSender>,
     menu_popup: Option<Id>,
     cap: crate::cap::CapPlanner,
+    /// Compiled from `config.cap_exceptions`; rebuilt on config updates.
+    cap_exceptions: ExceptionMatcher,
 }
 
 #[derive(Debug, Clone)]
@@ -54,16 +57,19 @@ impl cosmic::Application for AppModel {
     }
 
     fn init(core: cosmic::Core, _flags: Self::Flags) -> (Self, Task<Self::Message>) {
+        let config = Config::load();
+        let cap_exceptions = ExceptionMatcher::new(&config.cap_exceptions);
         (
             Self {
                 core,
-                config: Config::load(),
+                config,
                 workspaces: Vec::new(),
                 toplevels: Vec::new(),
                 caps: ManagerCaps::empty(),
                 sender: None,
                 menu_popup: None,
                 cap: crate::cap::CapPlanner::default(),
+                cap_exceptions,
             },
             Task::none(),
         )
@@ -153,11 +159,16 @@ impl cosmic::Application for AppModel {
                     self.config.cap_enabled,
                     self.config.cap_max_windows,
                     self.config.cap_only_place_new,
+                    &self.config.cap_exceptions,
                 ) != (
                     config.cap_enabled,
                     config.cap_max_windows,
                     config.cap_only_place_new,
+                    &config.cap_exceptions,
                 );
+                if self.config.cap_exceptions != config.cap_exceptions {
+                    self.cap_exceptions = ExceptionMatcher::new(&config.cap_exceptions);
+                }
                 self.config = config;
                 if cap_changed {
                     // Drop queue/in-flight state from the previous settings;
@@ -218,8 +229,17 @@ impl AppModel {
                 }
                 if self.config.cap_enabled {
                     // Experimental cap mode fully overrides rules: the window
-                    // is queued for capacity-based placement instead.
-                    self.cap.note_new(&snap.identifier);
+                    // is queued for capacity-based placement instead. Exempt
+                    // windows (dialogs, title-less popups) are left alone.
+                    if cap_exempt(&self.cap_exceptions, &snap.app_id, &snap.title) {
+                        tracing::info!(
+                            app_id = %snap.app_id,
+                            title = %snap.title,
+                            "cap: window exempt; leaving in place"
+                        );
+                    } else {
+                        self.cap.note_new(&snap.identifier);
+                    }
                     self.run_cap_step();
                 } else {
                     self.handle_new_toplevel(&snap);
@@ -285,7 +305,16 @@ impl AppModel {
             max_windows: self.config.cap_max_windows.max(1),
             only_place_new: self.config.cap_only_place_new,
         };
-        let moves = self.cap.step(&self.toplevels, &self.workspaces, &opts);
+        // Exempt windows are invisible to the planner: not counted toward
+        // any workspace's cap, never evicted or compacted. (A queued window
+        // that later turns exempt is dropped by the planner's gc.)
+        let eligible: Vec<ToplevelSnapshot> = self
+            .toplevels
+            .iter()
+            .filter(|t| !cap_exempt(&self.cap_exceptions, &t.app_id, &t.title))
+            .cloned()
+            .collect();
+        let moves = self.cap.step(&eligible, &self.workspaces, &opts);
         if moves.is_empty() {
             return;
         }

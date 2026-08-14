@@ -9,6 +9,7 @@ use cosmic::widget::{
 use uuid::Uuid;
 
 use crate::apply;
+use crate::cap_exceptions::{CapException, default_cap_exceptions};
 use crate::config::{APP_ID, Config};
 use crate::models::{Rule, WorkspaceTarget};
 use crate::wayland::{ToplevelSnapshot, WlEvent, WlSender, WorkspaceSnapshot, run as wl_run};
@@ -34,6 +35,9 @@ pub struct SettingsApp {
     ws_choices: Vec<WsChoice>,
     toplevel_labels: Vec<String>,
     form: Form,
+    // Draft inputs for a new cap exception (experimental card).
+    exc_appid: String,
+    exc_title: String,
     status: Option<Status>,
     sender: Option<WlSender>,
     try_results: HashMap<Uuid, TryResultEntry>,
@@ -145,6 +149,12 @@ pub enum Msg {
     ToggleCapEnabled(bool),
     CapMaxWindows(u32),
     ToggleCapOnlyPlaceNew(bool),
+    CapExcAppId(String),
+    CapExcTitle(String),
+    CapExcAdd,
+    CapExcDelete(usize),
+    CapExcToggle(usize),
+    CapExcRestoreDefaults,
 }
 
 impl cosmic::Application for SettingsApp {
@@ -177,63 +187,67 @@ impl cosmic::Application for SettingsApp {
 
     fn view(&self) -> Element<'_, Self::Message> {
         let header = text::title3("COSMIC Window Rules");
-        let sub = text::caption(
-            "When a window matching App ID (and optionally a title substring) appears, \
-             send it to the chosen workspace once. Add several rules for the same \
-             window to build a fallback: the topmost whose monitor is connected wins \
-             (reorder with ↑/↓).",
-        );
 
-        let form_open = self.form.mode.is_open();
-        let editing_id = self.form.mode.editing_id();
+        let mut root = Column::new().padding(16).spacing(12).push(header);
 
-        // Rules card: header (heading + Add rule button) + list / empty-state.
-        let mut add_btn = button::suggested("Add rule");
-        if !form_open {
-            add_btn = add_btn.on_press(Msg::StartCreate);
-        }
-        let rules_header = Row::new()
-            .align_y(Alignment::Center)
-            .spacing(8)
-            .push(text::heading("Rules").width(Length::Fill))
-            .push(add_btn);
+        // While the experimental cap is enabled it fully overrides rules, so
+        // the rules UI (list, editor, pin tip) is hidden to avoid implying
+        // rules are still in effect.
+        if !self.config.cap_enabled {
+            let sub = text::caption(
+                "When a window matching App ID (and optionally a title substring) appears, \
+                 send it to the chosen workspace once. Add several rules for the same \
+                 window to build a fallback: the topmost whose monitor is connected wins \
+                 (reorder with ↑/↓).",
+            );
 
-        let rules_body: Element<'_, Msg> = if self.config.rules.is_empty() {
-            text::caption("No rules yet. Click \"Add rule\" to get started.").into()
-        } else {
-            let total = self.config.rules.len();
-            let mut col = Column::new().spacing(6);
-            for (idx, r) in self.config.rules.iter().enumerate() {
-                col = col.push(rule_row(
-                    r,
-                    &self.workspaces,
-                    idx,
-                    total,
-                    form_open,
-                    editing_id,
-                    self.try_results.get(&r.id).map(|e| &e.outcome),
-                ));
+            let form_open = self.form.mode.is_open();
+            let editing_id = self.form.mode.editing_id();
+
+            // Rules card: header (heading + Add rule button) + list / empty-state.
+            let mut add_btn = button::suggested("Add rule");
+            if !form_open {
+                add_btn = add_btn.on_press(Msg::StartCreate);
             }
-            col.into()
-        };
+            let rules_header = Row::new()
+                .align_y(Alignment::Center)
+                .spacing(8)
+                .push(text::heading("Rules").width(Length::Fill))
+                .push(add_btn);
 
-        let rules_card = container(Column::new().spacing(8).push(rules_header).push(rules_body))
-            .padding(12)
-            .width(Length::Fill)
-            .class(cosmic::theme::Container::Card);
+            let rules_body: Element<'_, Msg> = if self.config.rules.is_empty() {
+                text::caption("No rules yet. Click \"Add rule\" to get started.").into()
+            } else {
+                let total = self.config.rules.len();
+                let mut col = Column::new().spacing(6);
+                for (idx, r) in self.config.rules.iter().enumerate() {
+                    col = col.push(rule_row(
+                        r,
+                        &self.workspaces,
+                        idx,
+                        total,
+                        form_open,
+                        editing_id,
+                        self.try_results.get(&r.id).map(|e| &e.outcome),
+                    ));
+                }
+                col.into()
+            };
 
-        let mut root = Column::new()
-            .padding(16)
-            .spacing(12)
-            .push(header)
-            .push(sub)
-            .push(rules_card)
-            .push(experimental_card(&self.config))
-            .push(pin_workspace_tip());
+            let rules_card =
+                container(Column::new().spacing(8).push(rules_header).push(rules_body))
+                    .padding(12)
+                    .width(Length::Fill)
+                    .class(cosmic::theme::Container::Card);
 
-        if form_open {
-            root = root.push(self.form_card());
+            root = root.push(sub).push(rules_card);
+            if form_open {
+                root = root.push(self.form_card());
+            }
+            root = root.push(pin_workspace_tip());
         }
+
+        root = root.push(self.experimental_card());
 
         container(scrollable(root).height(Length::Fill))
             .width(Length::Fill)
@@ -322,6 +336,26 @@ impl cosmic::Application for SettingsApp {
             Msg::ToggleCapOnlyPlaceNew(v) => {
                 self.config.cap_only_place_new = v;
                 self.save_config();
+            }
+            Msg::CapExcAppId(s) => self.exc_appid = s,
+            Msg::CapExcTitle(s) => self.exc_title = s,
+            Msg::CapExcAdd => self.add_cap_exception(),
+            Msg::CapExcDelete(idx) => {
+                if idx < self.config.cap_exceptions.len() {
+                    self.config.cap_exceptions.remove(idx);
+                    self.save_config();
+                }
+            }
+            Msg::CapExcToggle(idx) => {
+                if let Some(e) = self.config.cap_exceptions.get_mut(idx) {
+                    e.enabled = !e.enabled;
+                    self.save_config();
+                }
+            }
+            Msg::CapExcRestoreDefaults => {
+                self.config.cap_exceptions = default_cap_exceptions();
+                self.save_config();
+                self.status = Some(Status::info("Built-in exceptions restored."));
             }
         }
         Task::none()
@@ -588,6 +622,19 @@ impl SettingsApp {
         })
     }
 
+    fn add_cap_exception(&mut self) {
+        match validate_exception(&self.exc_appid, &self.exc_title) {
+            Ok(exc) => {
+                self.config.cap_exceptions.push(exc);
+                self.save_config();
+                self.exc_appid.clear();
+                self.exc_title.clear();
+                self.status = Some(Status::info("Exception added."));
+            }
+            Err(e) => self.status = Some(Status::error(e)),
+        }
+    }
+
     fn form_card(&self) -> Element<'_, Msg> {
         let is_editing = matches!(self.form.mode, FormMode::Editing(_));
         let heading_text = if is_editing { "Edit rule" } else { "Add rule" };
@@ -684,53 +731,141 @@ fn labeled_picker<'a>(label: &'a str, picker: Element<'a, Msg>) -> Element<'a, M
         .into()
 }
 
-fn experimental_card(config: &Config) -> Element<'_, Msg> {
-    let heading = text::heading("Experimental");
-    let enable_toggle = toggler(config.cap_enabled)
-        .label("Cap windows per workspace".to_owned())
-        .on_toggle(Msg::ToggleCapEnabled);
-    let caption = text::caption(
-        "New windows are placed on the first workspace with a free slot and \
-         focused; when a workspace empties, the following workspaces shift \
-         down as whole groups so no gaps are left. While enabled, the rules \
-         above are NOT applied.",
-    );
+impl SettingsApp {
+    fn experimental_card(&self) -> Element<'_, Msg> {
+        let config = &self.config;
+        let heading = text::heading("Experimental");
+        let enable_toggle = toggler(config.cap_enabled)
+            .label("Cap windows per workspace".to_owned())
+            .on_toggle(Msg::ToggleCapEnabled);
+        let caption = text::caption(
+            "New windows are placed on the first workspace with a free slot and \
+             focused; when a workspace empties, the following workspaces shift \
+             down as whole groups so no gaps are left. While enabled, the rules \
+             above are NOT applied.",
+        );
 
-    let mut inner = Column::new().spacing(8).push(heading).push(enable_toggle);
-    if config.cap_enabled {
-        // spin_button's `label` is the text shown between the -/+ buttons,
-        // i.e. the formatted value — the description goes in the row instead.
-        let max_spin = Row::new()
+        let mut inner = Column::new().spacing(8).push(heading).push(enable_toggle);
+        if config.cap_enabled {
+            // spin_button's `label` is the text shown between the -/+ buttons,
+            // i.e. the formatted value — the description goes in the row instead.
+            let max_spin = Row::new()
+                .align_y(Alignment::Center)
+                .spacing(8)
+                .push(text::body("Maximum windows per workspace").width(Length::Fill))
+                .push(spin_button(
+                    config.cap_max_windows.max(1).to_string(),
+                    config.cap_max_windows.max(1),
+                    1,
+                    1,
+                    20,
+                    Msg::CapMaxWindows,
+                ));
+            let place_only_toggle = toggler(config.cap_only_place_new)
+                .label("Only place new windows".to_owned())
+                .on_toggle(Msg::ToggleCapOnlyPlaceNew);
+            let place_only_caption = text::caption(
+                "Never reposition existing windows to enforce the cap — windows \
+                 you move or stack yourself are left alone. Empty-workspace gaps \
+                 are still compacted.",
+            );
+            inner = inner
+                .push(max_spin)
+                .push(place_only_toggle)
+                .push(place_only_caption)
+                .push(self.exceptions_section());
+        }
+        inner = inner.push(caption);
+        container(inner)
+            .padding(12)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card)
+            .into()
+    }
+
+    /// Editable list of cap exceptions — windows the cap never moves or
+    /// counts. Seeded from cosmic-comp's tiling exceptions.
+    fn exceptions_section(&self) -> Element<'_, Msg> {
+        let heading = text::body("Exceptions");
+        let caption = text::caption(
+            "Windows matching a regex pair below (empty = any) are left where \
+             they open — they are not moved, not counted toward the cap and \
+             not evicted. Use this for dialogs the compositor can't identify, \
+             e.g. Firefox's download prompt. Windows with an empty title are \
+             always skipped.",
+        );
+
+        let mut list = Column::new().spacing(2);
+        for (idx, e) in self.config.cap_exceptions.iter().enumerate() {
+            list = list.push(exception_row(idx, e));
+        }
+
+        let add_row = Row::new()
             .align_y(Alignment::Center)
             .spacing(8)
-            .push(text::body("Maximum windows per workspace").width(Length::Fill))
-            .push(spin_button(
-                config.cap_max_windows.max(1).to_string(),
-                config.cap_max_windows.max(1),
-                1,
-                1,
-                20,
-                Msg::CapMaxWindows,
-            ));
-        let place_only_toggle = toggler(config.cap_only_place_new)
-            .label("Only place new windows".to_owned())
-            .on_toggle(Msg::ToggleCapOnlyPlaceNew);
-        let place_only_caption = text::caption(
-            "Never reposition existing windows to enforce the cap — windows \
-             you move or stack yourself are left alone. Empty-workspace gaps \
-             are still compacted.",
-        );
-        inner = inner
-            .push(max_spin)
-            .push(place_only_toggle)
-            .push(place_only_caption);
+            .push(
+                text_input("app id regex (empty = any)", &self.exc_appid)
+                    .on_input(Msg::CapExcAppId),
+            )
+            .push(
+                text_input("title regex (empty = any)", &self.exc_title).on_input(Msg::CapExcTitle),
+            )
+            .push(button::suggested("Add").on_press(Msg::CapExcAdd));
+
+        let restore =
+            button::standard("Restore built-in exceptions").on_press(Msg::CapExcRestoreDefaults);
+
+        Column::new()
+            .spacing(8)
+            .push(heading)
+            .push(caption)
+            .push(list)
+            .push(add_row)
+            .push(restore)
+            .into()
     }
-    inner = inner.push(caption);
-    container(inner)
-        .padding(12)
-        .width(Length::Fill)
-        .class(cosmic::theme::Container::Card)
+}
+
+fn exception_row(idx: usize, e: &CapException) -> Element<'_, Msg> {
+    let appid = if e.appid.is_empty() {
+        "any app".to_owned()
+    } else {
+        e.appid.clone()
+    };
+    let title = if e.title.is_empty() {
+        "any title".to_owned()
+    } else {
+        e.title.clone()
+    };
+    let summary = text::body(format!("{appid}  —  {title}")).width(Length::Fill);
+    let enabled_toggle = toggler(e.enabled).on_toggle(move |_| Msg::CapExcToggle(idx));
+    let del_btn = button::destructive("Delete").on_press(Msg::CapExcDelete(idx));
+    Row::new()
+        .align_y(Alignment::Center)
+        .spacing(10)
+        .push(enabled_toggle)
+        .push(summary)
+        .push(del_btn)
         .into()
+}
+
+/// Validate the draft exception inputs, returning the entry to store. Both
+/// fields are regexes; empty means "match any", but at least one must be
+/// given (an entry matching everything would disable the cap entirely).
+fn validate_exception(appid: &str, title: &str) -> Result<CapException, String> {
+    let appid = appid.trim();
+    let title = title.trim();
+    if appid.is_empty() && title.is_empty() {
+        return Err("Provide an app id and/or title regex.".to_owned());
+    }
+    for (field, pattern) in [("app id", appid), ("title", title)] {
+        if !pattern.is_empty()
+            && let Err(e) = regex::Regex::new(pattern)
+        {
+            return Err(format!("Invalid {field} regex: {e}"));
+        }
+    }
+    Ok(CapException::new(appid, title))
 }
 
 fn pin_workspace_tip<'a>() -> Element<'a, Msg> {
@@ -1035,5 +1170,36 @@ mod tests {
         let live = vec![ws("1", 0, Some("DP-4"))];
         let choices = build_ws_choices(&live, None);
         assert_eq!(choices.len(), 1);
+    }
+
+    mod validate_exception {
+        use super::super::validate_exception;
+
+        #[test]
+        fn trims_and_accepts_valid_regexes() {
+            let e = validate_exception(" firefox ", " ^Opening ").unwrap();
+            assert_eq!(e.appid, "firefox");
+            assert_eq!(e.title, "^Opening");
+            assert!(e.enabled);
+        }
+
+        #[test]
+        fn one_empty_field_is_fine() {
+            assert!(validate_exception("zoom", "").is_ok());
+            assert!(validate_exception("", "Steam").is_ok());
+        }
+
+        #[test]
+        fn both_empty_is_rejected() {
+            assert!(validate_exception("  ", "").is_err());
+        }
+
+        #[test]
+        fn invalid_regex_is_rejected_with_field_name() {
+            let err = validate_exception("([", "").unwrap_err();
+            assert!(err.contains("app id"), "{err}");
+            let err = validate_exception("", "([").unwrap_err();
+            assert!(err.contains("title"), "{err}");
+        }
     }
 }

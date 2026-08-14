@@ -1,6 +1,7 @@
 mod app;
 mod apply;
 mod cap;
+mod cap_exceptions;
 mod config;
 mod dbus;
 mod debug;

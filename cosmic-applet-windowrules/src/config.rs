@@ -1,6 +1,7 @@
 use cosmic_config::CosmicConfigEntry;
 use cosmic_config_derive::CosmicConfigEntry;
 
+use crate::cap_exceptions::{CapException, default_cap_exceptions};
 use crate::models::Rule;
 
 pub const APP_ID: &str = "com.github.ragusa87.CosmicAppletWindowRules";
@@ -18,6 +19,10 @@ pub struct Config {
     /// the cap (manual arrangements are respected); empty-workspace gaps are
     /// still compacted away, moving whole groups without splitting them.
     pub cap_only_place_new: bool,
+    /// Windows the cap never touches (dialogs and other transients the
+    /// protocol can't identify). See `cap_exceptions.rs`; seeded from
+    /// cosmic-comp's tiling exceptions.
+    pub cap_exceptions: Vec<CapException>,
 }
 
 impl Default for Config {
@@ -27,6 +32,7 @@ impl Default for Config {
             cap_enabled: false,
             cap_max_windows: 1,
             cap_only_place_new: false,
+            cap_exceptions: default_cap_exceptions(),
         }
     }
 }
@@ -60,5 +66,11 @@ mod tests {
         assert!(!c.cap_enabled);
         assert_eq!(c.cap_max_windows, 1);
         assert!(!c.cap_only_place_new);
+    }
+
+    #[test]
+    fn default_exceptions_are_prefilled() {
+        let c = Config::default();
+        assert!(c.cap_exceptions.iter().any(|e| e.appid == "Steam"));
     }
 }

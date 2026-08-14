@@ -172,11 +172,12 @@ impl CapPlanner {
         true
     }
 
-    /// Place the oldest pending new window on the lowest-index workspace of
-    /// its output with free capacity, activating it. A window that already
-    /// fits where it opened is left alone. Waits (returns None without
-    /// popping) while no workspace has capacity — the compositor hasn't
-    /// grown the trailing empty workspace yet.
+    /// Place the oldest pending new window. If it already fits where it
+    /// opened (count <= max) it's left alone; otherwise it always moves to a
+    /// fresh workspace — the trailing empty one — rather than reusing an
+    /// under-full lower workspace. Waits (returns None without popping) while
+    /// the trailing workspace isn't empty yet, i.e. the compositor hasn't
+    /// grown the list.
     fn plan_placement(
         &mut self,
         placed: &[(&ToplevelSnapshot, &TlWorkspace)],
@@ -202,17 +203,18 @@ impl CapPlanner {
                 continue;
             }
 
+            // Over the cap where it opened → always spawn a fresh workspace
+            // (the trailing empty one), never reuse an under-full lower
+            // workspace. If the trailing workspace isn't empty yet the
+            // compositor hasn't grown the list — wait for the next snapshot.
             let target = workspaces
                 .iter()
                 .filter(|w| w.output_name == current.output_name)
                 .map(|w| w.index)
-                .filter(|i| count_at(*i) < max)
-                .min();
-            let Some(target) = target else {
-                // No capacity anywhere (trailing workspace not created yet);
-                // wait for the snapshot where the compositor grew the list.
+                .max()?;
+            if count_at(target) != 0 {
                 return None;
-            };
+            }
             self.pending_new.pop_front();
             self.in_flight = Some(InFlight {
                 moves: vec![(id.clone(), target)],
@@ -842,9 +844,10 @@ mod tests {
     }
 
     #[test]
-    fn max2_overflow_places_on_first_workspace_with_capacity() {
-        // ws 0 holds 3 (over cap), ws 1 holds 1 (has room) → target ws 1,
-        // not the trailing empty ws 2.
+    fn max2_overflow_always_spawns_new_workspace() {
+        // ws 0 holds 3 (over cap), ws 1 holds 1 (has room) — but a new
+        // window always spawns a fresh workspace, so target the trailing
+        // empty ws 2, never the under-full ws 1.
         let toplevels = vec![
             tl("a", &[("eDP-1", 0)]),
             tl("b", &[("eDP-1", 0)]),
@@ -857,7 +860,7 @@ mod tests {
         let batch = p.step(&toplevels, &workspaces, &opts_max(2));
         assert_eq!(
             (batch[0].identifier.as_str(), batch[0].target_index),
-            ("c", 1)
+            ("c", 2)
         );
         assert!(batch[0].activate);
     }
