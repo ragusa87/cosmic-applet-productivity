@@ -38,6 +38,8 @@ pub struct WorkspaceSnapshot {
     pub index: u32,
     pub output_name: Option<String>,
     pub is_pinned: bool,
+    /// The workspace the user is currently looking at (one per output).
+    pub is_active: bool,
 }
 
 /// A workspace a toplevel currently sits on, located by output and per-output
@@ -410,12 +412,16 @@ fn collect_workspaces(
         // constant because the bindings are auto-generated and the variant
         // name has shifted across versions.
         let pinned_bit = zcosmic_workspace_handle_v2::State::from_bits_truncate(1);
+        // `active` is bit 0 of the upstream ext_workspace_handle_v1 state
+        // bitfield (active = 0x1, urgent = 0x2, hidden = 0x4).
+        let active_bit = ext_workspace_handle_v1::State::from_bits_truncate(1);
         for (idx, w) in ws.iter().enumerate() {
             out.push(WorkspaceSnapshot {
                 name: w.name.clone(),
                 index: u32::try_from(idx).unwrap_or(0),
                 output_name: output_name.clone(),
                 is_pinned: w.cosmic_state.contains(pinned_bit),
+                is_active: w.state.contains(active_bit),
             });
         }
     }

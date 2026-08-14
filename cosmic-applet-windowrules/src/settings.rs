@@ -1105,6 +1105,7 @@ mod tests {
             index,
             output_name: output.map(Into::into),
             is_pinned: false,
+            is_active: false,
         }
     }
 

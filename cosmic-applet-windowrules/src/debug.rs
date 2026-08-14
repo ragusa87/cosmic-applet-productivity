@@ -35,9 +35,10 @@ pub fn run() {
                     );
                     for w in &workspaces {
                         let pin = if w.is_pinned { " [pinned]" } else { "" };
+                        let act = if w.is_active { " [active]" } else { "" };
                         println!(
-                            "  workspace name={:?} index={} output={:?}{}",
-                            w.name, w.index, w.output_name, pin
+                            "  workspace name={:?} index={} output={:?}{}{}",
+                            w.name, w.index, w.output_name, pin, act
                         );
                     }
                     for t in &toplevels {

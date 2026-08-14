@@ -305,16 +305,16 @@ impl AppModel {
             max_windows: self.config.cap_max_windows.max(1),
             only_place_new: self.config.cap_only_place_new,
         };
-        // Exempt windows are invisible to the planner: not counted toward
-        // any workspace's cap, never evicted or compacted. (A queued window
-        // that later turns exempt is dropped by the planner's gc.)
-        let eligible: Vec<ToplevelSnapshot> = self
+        // Exempt windows are never planned: not counted toward any
+        // workspace's cap, never evicted or compacted. (A queued window that
+        // later turns exempt is dropped by the planner's gc.) They are still
+        // passed along so their workspaces read as occupied, not as gaps.
+        let (eligible, exempt): (Vec<ToplevelSnapshot>, Vec<ToplevelSnapshot>) = self
             .toplevels
             .iter()
-            .filter(|t| !cap_exempt(&self.cap_exceptions, &t.app_id, &t.title))
             .cloned()
-            .collect();
-        let moves = self.cap.step(&eligible, &self.workspaces, &opts);
+            .partition(|t| !cap_exempt(&self.cap_exceptions, &t.app_id, &t.title));
+        let moves = self.cap.step(&eligible, &exempt, &self.workspaces, &opts);
         if moves.is_empty() {
             return;
         }

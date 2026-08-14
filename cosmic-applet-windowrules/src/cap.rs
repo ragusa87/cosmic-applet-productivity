@@ -11,7 +11,7 @@
 //! window opens: the next trailing empty workspace only exists once the
 //! previous one is occupied.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::wayland::{TlWorkspace, ToplevelSnapshot, WorkspaceSnapshot};
 
@@ -87,9 +87,14 @@ impl CapPlanner {
 
     /// Compute the next batch of moves toward the capped layout, or an empty
     /// vec if converged / waiting on the compositor.
+    ///
+    /// `exempt` holds the windows excluded from planning (never counted,
+    /// queued or moved); their workspaces still count as occupied so gap
+    /// compaction doesn't collapse groups onto them.
     pub fn step(
         &mut self,
         toplevels: &[ToplevelSnapshot],
+        exempt: &[ToplevelSnapshot],
         workspaces: &[WorkspaceSnapshot],
         opts: &CapOptions,
     ) -> Vec<PlannedMove> {
@@ -111,7 +116,18 @@ impl CapPlanner {
             })
             .collect();
 
-        if let Some(mv) = self.plan_placement(&placed, workspaces, max) {
+        // Workspaces holding an exempt window are invisible to the cap but
+        // not vacant: never an "empty gap" to compact into, never a fresh
+        // workspace to place a new window on.
+        let anchors: Vec<TlWorkspace> = exempt
+            .iter()
+            .filter_map(|t| match t.workspaces.as_slice() {
+                [ws] => Some(ws.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if let Some(mv) = self.plan_placement(&placed, &anchors, workspaces, max) {
             return vec![mv];
         }
         // Compact/evict only once no new window is waiting: a pending
@@ -119,7 +135,15 @@ impl CapPlanner {
         if !self.pending_new.is_empty() {
             return Vec::new();
         }
-        let cascade = self.plan_gap_compaction(&placed);
+        // The active workspace on each output is anchored too: the user is
+        // looking at it — collapsing it, or a window on it, away would
+        // strand them on an empty screen.
+        let active_by_output: HashMap<Option<String>, u32> = workspaces
+            .iter()
+            .filter(|w| w.is_active)
+            .map(|w| (w.output_name.clone(), w.index))
+            .collect();
+        let cascade = self.plan_gap_compaction(&placed, &anchors, &active_by_output);
         if !cascade.is_empty() || opts.only_place_new {
             return cascade;
         }
@@ -173,14 +197,17 @@ impl CapPlanner {
     }
 
     /// Place the oldest pending new window. If it already fits where it
-    /// opened (count <= max) it's left alone; otherwise it always moves to a
-    /// fresh workspace — the trailing empty one — rather than reusing an
-    /// under-full lower workspace. Waits (returns None without popping) while
-    /// the trailing workspace isn't empty yet, i.e. the compositor hasn't
-    /// grown the list.
+    /// opened (count <= max) it's left alone; otherwise it moves to a fresh
+    /// workspace — the lowest one that is truly free (no planned window, no
+    /// exempt window) — rather than reusing an under-full occupied workspace
+    /// or skipping past an empty mid-list workspace (pinned/kept ones sit
+    /// below the trailing empty). Waits (returns None without popping) while
+    /// no free workspace exists yet, i.e. the compositor hasn't grown the
+    /// list.
     fn plan_placement(
         &mut self,
         placed: &[(&ToplevelSnapshot, &TlWorkspace)],
+        anchors: &[TlWorkspace],
         workspaces: &[WorkspaceSnapshot],
         max: u32,
     ) -> Option<PlannedMove> {
@@ -195,6 +222,11 @@ impl CapPlanner {
                     .filter(|(_, w)| w.output_name == current.output_name && w.index == index)
                     .count() as u32
             };
+            let anchored = |index: u32| {
+                anchors
+                    .iter()
+                    .any(|w| w.output_name == current.output_name && w.index == index)
+            };
 
             // Fits where it opened (count includes the window itself): no
             // move, no activation — it opened on the active workspace.
@@ -203,18 +235,15 @@ impl CapPlanner {
                 continue;
             }
 
-            // Over the cap where it opened → always spawn a fresh workspace
-            // (the trailing empty one), never reuse an under-full lower
-            // workspace. If the trailing workspace isn't empty yet the
-            // compositor hasn't grown the list — wait for the next snapshot.
+            // Over the cap where it opened → move to the lowest free
+            // workspace. If none is free the compositor hasn't grown the
+            // list yet — wait for the next snapshot.
             let target = workspaces
                 .iter()
                 .filter(|w| w.output_name == current.output_name)
                 .map(|w| w.index)
-                .max()?;
-            if count_at(target) != 0 {
-                return None;
-            }
+                .filter(|i| count_at(*i) == 0 && !anchored(*i))
+                .min()?;
             self.pending_new.pop_front();
             self.in_flight = Some(InFlight {
                 moves: vec![(id.clone(), target)],
@@ -307,33 +336,53 @@ impl CapPlanner {
     }
 
     /// Gap compaction (both modes): never split or merge groups, just close
-    /// empty-workspace gaps by moving each whole group down to its rank
-    /// among occupied workspaces — stepwise this is the 4→3, 5→4, 6→5
-    /// cascade. The group is emitted as one batch (same source → same lower
-    /// target), which is safe against mid-list pruning: the target sits
-    /// below the gap, so no prune can shift it while the batch executes.
+    /// empty-workspace gaps by moving each whole group down to the lowest
+    /// free index below it — stepwise this is the 4→3, 5→4, 6→5 cascade.
+    /// "Free" excludes anchored workspaces (exempt-occupied or active), so
+    /// groups never stack onto an exempt window's workspace and never hop
+    /// over one into its slot. A group sitting on the active workspace is
+    /// never moved at all: its windows are what the user is looking at.
+    /// The group is emitted as one batch (same source → same lower target),
+    /// which is safe against mid-list pruning: the target sits below the
+    /// gap, so no prune can shift it while the batch executes.
     fn plan_gap_compaction(
         &mut self,
         placed: &[(&ToplevelSnapshot, &TlWorkspace)],
+        anchors: &[TlWorkspace],
+        active_by_output: &HashMap<Option<String>, u32>,
     ) -> Vec<PlannedMove> {
         for output in outputs_of(placed) {
-            let mut occupied: Vec<u32> = placed
+            let active = active_by_output.get(output).copied();
+            let mut group_indices: Vec<u32> = placed
                 .iter()
                 .filter(|(_, w)| &w.output_name == output)
                 .map(|(_, w)| w.index)
                 .collect();
-            occupied.sort_unstable();
-            occupied.dedup();
-            for (rank, idx) in occupied.iter().enumerate() {
-                let rank = u32::try_from(rank).unwrap_or(u32::MAX);
-                if *idx == rank {
+            group_indices.sort_unstable();
+            group_indices.dedup();
+            let blocked: HashSet<u32> = group_indices
+                .iter()
+                .copied()
+                .chain(
+                    anchors
+                        .iter()
+                        .filter(|w| &w.output_name == output)
+                        .map(|w| w.index),
+                )
+                .chain(active)
+                .collect();
+            for idx in group_indices {
+                if Some(idx) == active {
                     continue;
                 }
-                // Gap below this group: move the whole group to `rank`.
+                let Some(target) = (0..idx).find(|i| !blocked.contains(i)) else {
+                    continue;
+                };
+                // Gap below this group: move the whole group into it.
                 let group: Vec<(String, u32)> = placed
                     .iter()
-                    .filter(|(_, w)| &w.output_name == output && w.index == *idx)
-                    .map(|(t, _)| (t.identifier.clone(), rank))
+                    .filter(|(_, w)| &w.output_name == output && w.index == idx)
+                    .map(|(t, _)| (t.identifier.clone(), target))
                     .collect();
                 self.in_flight = Some(InFlight {
                     moves: group.clone(),
@@ -388,6 +437,14 @@ mod tests {
             index,
             output_name: Some(output.into()),
             is_pinned: false,
+            is_active: false,
+        }
+    }
+
+    fn ws_active(output: &str, index: u32) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            is_active: true,
+            ..ws(output, index)
         }
     }
 
@@ -496,6 +553,7 @@ mod tests {
                         index: i,
                         output_name: output.clone(),
                         is_pinned: false,
+                        is_active: false,
                     });
                 }
             }
@@ -511,7 +569,7 @@ mod tests {
     ) -> Vec<PlannedMove> {
         let mut moves = Vec::new();
         for _ in 0..50 {
-            let batch = planner.step(&comp.toplevels, &comp.workspaces, opts);
+            let batch = planner.step(&comp.toplevels, &[], &comp.workspaces, opts);
             if batch.is_empty() {
                 // Empty can mean "waiting" (pending/in-flight) — only stop
                 // once the planner is truly idle.
@@ -546,7 +604,7 @@ mod tests {
         let mut p = CapPlanner::default();
         p.note_new("b");
 
-        let batch = p.step(&comp.toplevels, &comp.workspaces, &opts1());
+        let batch = p.step(&comp.toplevels, &[], &comp.workspaces, &opts1());
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].identifier, "b");
         assert_eq!(batch[0].target_index, 1);
@@ -565,7 +623,7 @@ mod tests {
         let mut p = CapPlanner::default();
         p.note_new("a");
         assert!(
-            p.step(&comp.toplevels, &comp.workspaces, &opts1())
+            p.step(&comp.toplevels, &[], &comp.workspaces, &opts1())
                 .is_empty()
         );
         assert!(
@@ -589,16 +647,16 @@ mod tests {
         p.note_new("b");
         p.note_new("c");
 
-        let b1 = p.step(&comp.toplevels, &comp.workspaces, &opts1());
+        let b1 = p.step(&comp.toplevels, &[], &comp.workspaces, &opts1());
         assert_eq!((b1[0].identifier.as_str(), b1[0].target_index), ("b", 1));
         // Before the compositor reflects the move, nothing more is planned.
         assert!(
-            p.step(&comp.toplevels, &comp.workspaces, &opts1())
+            p.step(&comp.toplevels, &[], &comp.workspaces, &opts1())
                 .is_empty()
         );
         comp.apply(&b1);
 
-        let b2 = p.step(&comp.toplevels, &comp.workspaces, &opts1());
+        let b2 = p.step(&comp.toplevels, &[], &comp.workspaces, &opts1());
         assert_eq!((b2[0].identifier.as_str(), b2[0].target_index), ("c", 2));
         assert!(b2[0].activate);
         comp.apply(&b2);
@@ -621,11 +679,14 @@ mod tests {
         let stale_workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1)];
         let mut p = CapPlanner::default();
         p.note_new("c");
-        assert!(p.step(&toplevels, &stale_workspaces, &opts1()).is_empty());
+        assert!(
+            p.step(&toplevels, &[], &stale_workspaces, &opts1())
+                .is_empty()
+        );
 
         // Compositor catches up and creates trailing ws 2.
         let grown = vec![ws("eDP-1", 0), ws("eDP-1", 1), ws("eDP-1", 2)];
-        let batch = p.step(&toplevels, &grown, &opts1());
+        let batch = p.step(&toplevels, &[], &grown, &opts1());
         assert_eq!(
             (batch[0].identifier.as_str(), batch[0].target_index),
             ("c", 2)
@@ -673,7 +734,7 @@ mod tests {
             ws("eDP-1", 3),
         ];
         let mut p = CapPlanner::default();
-        let batch = p.step(&toplevels, &workspaces, &opts1());
+        let batch = p.step(&toplevels, &[], &workspaces, &opts1());
         assert_eq!(
             (batch[0].identifier.as_str(), batch[0].target_index),
             ("c", 1)
@@ -690,7 +751,7 @@ mod tests {
         let mut p = CapPlanner::default();
         for _ in 0..5 {
             assert!(
-                p.step(&comp.toplevels, &comp.workspaces, &opts1())
+                p.step(&comp.toplevels, &[], &comp.workspaces, &opts1())
                     .is_empty()
             );
         }
@@ -727,7 +788,7 @@ mod tests {
         ];
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1)];
         let mut p = CapPlanner::default();
-        let batch = p.step(&toplevels, &workspaces, &opts1());
+        let batch = p.step(&toplevels, &[], &workspaces, &opts1());
         // "b" (second on ws 0) moves to ws 1 even though sticky "s" is there.
         assert_eq!(
             (batch[0].identifier.as_str(), batch[0].target_index),
@@ -741,7 +802,7 @@ mod tests {
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1)];
         let mut p = CapPlanner::default();
         p.note_new("b");
-        assert!(p.step(&toplevels, &workspaces, &opts1()).is_empty());
+        assert!(p.step(&toplevels, &[], &workspaces, &opts1()).is_empty());
         assert_eq!(p.pending_new.len(), 1, "still waiting, not dropped");
     }
 
@@ -774,14 +835,14 @@ mod tests {
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1)];
         let mut p = CapPlanner::default();
         p.note_new("b");
-        assert!(!p.step(&toplevels, &workspaces, &opts1()).is_empty());
+        assert!(!p.step(&toplevels, &[], &workspaces, &opts1()).is_empty());
         // The compositor never applies the move: silence until TTL runs out.
         for _ in 0..(IN_FLIGHT_TTL - 1) {
-            assert!(p.step(&toplevels, &workspaces, &opts1()).is_empty());
+            assert!(p.step(&toplevels, &[], &workspaces, &opts1()).is_empty());
         }
         // TTL expired → the planner re-plans (b is no longer pending_new, so
         // this surfaces as a re-pack move without activation).
-        let batch = p.step(&toplevels, &workspaces, &opts1());
+        let batch = p.step(&toplevels, &[], &workspaces, &opts1());
         assert_eq!(
             (batch[0].identifier.as_str(), batch[0].target_index),
             ("b", 1)
@@ -807,10 +868,10 @@ mod tests {
         let first = vec![tl("z", &[("eDP-1", 0)])];
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1)];
         let mut p = CapPlanner::default();
-        assert!(p.step(&first, &workspaces, &opts1()).is_empty());
+        assert!(p.step(&first, &[], &workspaces, &opts1()).is_empty());
 
         let both = vec![tl("z", &[("eDP-1", 0)]), tl("b", &[("eDP-1", 0)])];
-        let batch = p.step(&both, &workspaces, &opts1());
+        let batch = p.step(&both, &[], &workspaces, &opts1());
         assert_eq!(
             (batch[0].identifier.as_str(), batch[0].target_index),
             ("b", 1)
@@ -823,7 +884,7 @@ mod tests {
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1)];
         let mut p = CapPlanner::default();
         p.note_new("ghost");
-        assert!(p.step(&toplevels, &workspaces, &opts1()).is_empty());
+        assert!(p.step(&toplevels, &[], &workspaces, &opts1()).is_empty());
         assert!(
             p.pending_new.is_empty(),
             "vanished window dropped from queue"
@@ -839,7 +900,10 @@ mod tests {
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1)];
         let mut p = CapPlanner::default();
         p.note_new("b");
-        assert!(p.step(&toplevels, &workspaces, &opts_max(2)).is_empty());
+        assert!(
+            p.step(&toplevels, &[], &workspaces, &opts_max(2))
+                .is_empty()
+        );
         assert!(p.pending_new.is_empty());
     }
 
@@ -857,7 +921,7 @@ mod tests {
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1), ws("eDP-1", 2)];
         let mut p = CapPlanner::default();
         p.note_new("c");
-        let batch = p.step(&toplevels, &workspaces, &opts_max(2));
+        let batch = p.step(&toplevels, &[], &workspaces, &opts_max(2));
         assert_eq!(
             (batch[0].identifier.as_str(), batch[0].target_index),
             ("c", 2)
@@ -900,7 +964,10 @@ mod tests {
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1), ws("eDP-1", 2)];
         let mut p = CapPlanner::default();
         for _ in 0..3 {
-            assert!(p.step(&toplevels, &workspaces, &opts_max(2)).is_empty());
+            assert!(
+                p.step(&toplevels, &[], &workspaces, &opts_max(2))
+                    .is_empty()
+            );
         }
     }
 
@@ -920,7 +987,7 @@ mod tests {
             ws("eDP-1", 3),
         ];
         let mut p = CapPlanner::default();
-        let batch = p.step(&toplevels, &workspaces, &opts_max(2));
+        let batch = p.step(&toplevels, &[], &workspaces, &opts_max(2));
         assert_eq!(batch.len(), 2);
         assert!(batch.iter().all(|m| m.target_index == 1 && !m.activate));
     }
@@ -935,7 +1002,7 @@ mod tests {
         let mut p = CapPlanner::default();
         for _ in 0..3 {
             assert!(
-                p.step(&toplevels, &workspaces, &opts_place_only(1))
+                p.step(&toplevels, &[], &workspaces, &opts_place_only(1))
                     .is_empty()
             );
         }
@@ -947,7 +1014,7 @@ mod tests {
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1)];
         let mut p = CapPlanner::default();
         p.note_new("b");
-        let batch = p.step(&toplevels, &workspaces, &opts_place_only(1));
+        let batch = p.step(&toplevels, &[], &workspaces, &opts_place_only(1));
         assert_eq!(
             (batch[0].identifier.as_str(), batch[0].target_index),
             ("b", 1)
@@ -971,7 +1038,7 @@ mod tests {
             ws("eDP-1", 3),
         ];
         let mut p = CapPlanner::default();
-        let batch = p.step(&toplevels, &workspaces, &opts_place_only(1));
+        let batch = p.step(&toplevels, &[], &workspaces, &opts_place_only(1));
         assert_eq!(batch.len(), 2);
         let mut ids: Vec<&str> = batch.iter().map(|m| m.identifier.as_str()).collect();
         ids.sort_unstable();
@@ -985,8 +1052,163 @@ mod tests {
             tl("e", &[("eDP-1", 1)]),
         ];
         let after = vec![ws("eDP-1", 0), ws("eDP-1", 1), ws("eDP-1", 2)];
-        assert!(p.step(&landed, &after, &opts_place_only(1)).is_empty());
-        assert!(p.step(&landed, &after, &opts_place_only(1)).is_empty());
+        assert!(p.step(&landed, &[], &after, &opts_place_only(1)).is_empty());
+        assert!(p.step(&landed, &[], &after, &opts_place_only(1)).is_empty());
+    }
+
+    // ---- active-workspace & exempt-window anchoring ----
+
+    #[test]
+    fn new_window_on_active_workspace_is_not_pulled_down() {
+        // The reported bug: user sits on empty ws 2 (active) with ws 0/1
+        // also empty, opens a terminal there — it must stay put, not be
+        // gap-compacted to ws 0 (without activation) while the user keeps
+        // staring at an empty ws 2.
+        let toplevels = vec![tl("term", &[("eDP-1", 2)])];
+        let workspaces = vec![
+            ws("eDP-1", 0),
+            ws("eDP-1", 1),
+            ws_active("eDP-1", 2),
+            ws("eDP-1", 3),
+        ];
+        let mut p = CapPlanner::default();
+        p.note_new("term");
+        for _ in 0..3 {
+            assert!(
+                p.step(&toplevels, &[], &workspaces, &opts_place_only(2))
+                    .is_empty()
+            );
+        }
+        assert!(p.pending_new.is_empty(), "placement resolved in place");
+    }
+
+    #[test]
+    fn group_on_active_workspace_is_never_moved() {
+        // Same layout but the window predates the planner (no pending_new):
+        // a group on the active workspace is exempt from compaction too.
+        let toplevels = vec![tl("a", &[("eDP-1", 0)]), tl("b", &[("eDP-1", 2)])];
+        let workspaces = vec![
+            ws("eDP-1", 0),
+            ws("eDP-1", 1),
+            ws_active("eDP-1", 2),
+            ws("eDP-1", 3),
+        ];
+        let mut p = CapPlanner::default();
+        for _ in 0..3 {
+            assert!(p.step(&toplevels, &[], &workspaces, &opts1()).is_empty());
+        }
+    }
+
+    #[test]
+    fn empty_active_workspace_is_not_a_gap() {
+        // User deliberately went to empty ws 1: the group on ws 2 must not
+        // collapse down onto the workspace the user is looking at.
+        let toplevels = vec![tl("a", &[("eDP-1", 0)]), tl("c", &[("eDP-1", 2)])];
+        let workspaces = vec![
+            ws("eDP-1", 0),
+            ws_active("eDP-1", 1),
+            ws("eDP-1", 2),
+            ws("eDP-1", 3),
+        ];
+        let mut p = CapPlanner::default();
+        for _ in 0..3 {
+            assert!(p.step(&toplevels, &[], &workspaces, &opts1()).is_empty());
+        }
+    }
+
+    #[test]
+    fn exempt_occupied_workspace_is_not_a_gap() {
+        // ws 1 holds only an exempt window (e.g. zoom). It is invisible to
+        // the cap but its workspace is occupied: "b" on ws 2 must neither
+        // stack onto it nor hop over it into its slot.
+        let exempt = vec![tl("zoom", &[("eDP-1", 1)])];
+        let toplevels = vec![tl("a", &[("eDP-1", 0)]), tl("b", &[("eDP-1", 2)])];
+        let workspaces = vec![
+            ws("eDP-1", 0),
+            ws("eDP-1", 1),
+            ws("eDP-1", 2),
+            ws("eDP-1", 3),
+        ];
+        let mut p = CapPlanner::default();
+        for _ in 0..3 {
+            assert!(
+                p.step(&toplevels, &exempt, &workspaces, &opts1())
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn overflow_fills_empty_mid_list_workspace_not_trailing() {
+        // The firefox report: user on ws 1 where firefox is the 3rd window
+        // (over cap 2); ws 2 is empty but sits mid-list (pinned/kept), ws 3
+        // is the trailing empty. Firefox must land on ws 2, not skip to 3.
+        let toplevels = vec![
+            tl("a", &[("eDP-1", 0)]),
+            tl("b", &[("eDP-1", 1)]),
+            tl("c", &[("eDP-1", 1)]),
+            tl("ff", &[("eDP-1", 1)]),
+        ];
+        let workspaces = vec![
+            ws("eDP-1", 0),
+            ws_active("eDP-1", 1),
+            ws("eDP-1", 2),
+            ws("eDP-1", 3),
+        ];
+        let mut p = CapPlanner::default();
+        p.note_new("ff");
+        let batch = p.step(&toplevels, &[], &workspaces, &opts_max(2));
+        assert_eq!(
+            (batch[0].identifier.as_str(), batch[0].target_index),
+            ("ff", 2)
+        );
+        assert!(batch[0].activate);
+    }
+
+    #[test]
+    fn placement_skips_exempt_occupied_workspace() {
+        // Same layout, but the empty-looking ws 2 actually holds an exempt
+        // window (e.g. zoom): the new window goes to ws 3 instead.
+        let exempt = vec![tl("zoom", &[("eDP-1", 2)])];
+        let toplevels = vec![
+            tl("a", &[("eDP-1", 0)]),
+            tl("b", &[("eDP-1", 1)]),
+            tl("c", &[("eDP-1", 1)]),
+            tl("ff", &[("eDP-1", 1)]),
+        ];
+        let workspaces = vec![
+            ws("eDP-1", 0),
+            ws_active("eDP-1", 1),
+            ws("eDP-1", 2),
+            ws("eDP-1", 3),
+        ];
+        let mut p = CapPlanner::default();
+        p.note_new("ff");
+        let batch = p.step(&toplevels, &exempt, &workspaces, &opts_max(2));
+        assert_eq!(
+            (batch[0].identifier.as_str(), batch[0].target_index),
+            ("ff", 3)
+        );
+    }
+
+    #[test]
+    fn gap_behind_the_user_still_compacts() {
+        // Active anchor doesn't disable compaction elsewhere: user on ws 0,
+        // empty gap at ws 1, group on ws 2 → moves down to 1, no activation.
+        let toplevels = vec![tl("a", &[("eDP-1", 0)]), tl("c", &[("eDP-1", 2)])];
+        let workspaces = vec![
+            ws_active("eDP-1", 0),
+            ws("eDP-1", 1),
+            ws("eDP-1", 2),
+            ws("eDP-1", 3),
+        ];
+        let mut p = CapPlanner::default();
+        let batch = p.step(&toplevels, &[], &workspaces, &opts1());
+        assert_eq!(
+            (batch[0].identifier.as_str(), batch[0].target_index),
+            ("c", 1)
+        );
+        assert!(!batch[0].activate);
     }
 
     #[test]
@@ -995,7 +1217,7 @@ mod tests {
         let workspaces = vec![ws("eDP-1", 0), ws("eDP-1", 1)];
         let mut p = CapPlanner::default();
         p.note_new("b");
-        let batch = p.step(&toplevels, &workspaces, &opts_max(0));
+        let batch = p.step(&toplevels, &[], &workspaces, &opts_max(0));
         assert_eq!(
             (batch[0].identifier.as_str(), batch[0].target_index),
             ("b", 1)
