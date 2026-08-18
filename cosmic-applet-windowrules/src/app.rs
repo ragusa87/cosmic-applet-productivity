@@ -150,7 +150,7 @@ impl cosmic::Application for AppModel {
                     self.menu_popup = None;
                 }
             }
-            Message::OverviewResult(Ok(())) => {}
+            Message::OverviewResult(Ok(())) | Message::NoOp => {}
             Message::OverviewResult(Err(e)) => {
                 tracing::warn!(error = %e, "failed to open workspace overview");
             }
@@ -180,7 +180,6 @@ impl cosmic::Application for AppModel {
                     }
                 }
             }
-            Message::NoOp => {}
         }
         Task::none()
     }
@@ -345,24 +344,16 @@ impl AppModel {
         }
     }
 
-    /// Pick the rule to apply to `snap`. Rules matching the same window form an
-    /// ordered fallback list: prefer the first (top-most) whose target monitor
-    /// is currently connected, so "workspace 1 on the external screen" wins when
-    /// it's plugged in and "workspace 1 on the laptop panel" takes over when it
-    /// isn't. If none of the targets' monitors are present, fall back to the
-    /// first match (best effort — the move may silently no-op, as before).
+    /// Pick the rule to apply to `snap`. Thin wrapper over the shared,
+    /// unit-tested [`crate::decide::select_rule`] so the applet and the
+    /// `--debug` explainer make identical decisions.
     fn select_rule(&self, snap: &ToplevelSnapshot) -> Option<&Rule> {
-        let matches: Vec<&Rule> = self
-            .config
-            .rules
-            .iter()
-            .filter(|r| r.matches(&snap.app_id, &snap.title))
-            .collect();
-        matches
-            .iter()
-            .copied()
-            .find(|r| output_available(r, &self.workspaces))
-            .or_else(|| matches.first().copied())
+        crate::decide::select_rule(
+            &self.config.rules,
+            &self.workspaces,
+            &snap.app_id,
+            &snap.title,
+        )
     }
 
     fn toggle_menu_popup(&mut self) -> Task<Message> {
@@ -422,18 +413,6 @@ impl AppModel {
             "applet: apply all rules"
         );
         close
-    }
-}
-
-/// Whether `rule`'s target monitor is currently connected. A rule with no
-/// `target_output` is always "available"; one that names an output requires
-/// that output to currently expose at least one workspace.
-fn output_available(rule: &Rule, workspaces: &[WorkspaceSnapshot]) -> bool {
-    match &rule.target_output {
-        None => true,
-        Some(out) => workspaces
-            .iter()
-            .any(|w| w.output_name.as_deref() == Some(out.as_str())),
     }
 }
 

@@ -5,6 +5,7 @@ mod cap_exceptions;
 mod config;
 mod dbus;
 mod debug;
+mod decide;
 mod models;
 mod settings;
 mod wayland;

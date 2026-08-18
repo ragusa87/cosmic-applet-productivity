@@ -286,5 +286,6 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
         weekly,
         spend: None,
         scoped: Vec::new(),
+        model: crate::model_config::openai_model(),
     })
 }
