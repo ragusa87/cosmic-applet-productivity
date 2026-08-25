@@ -605,7 +605,29 @@ fn recompute_next(
         *idle_since = Some(latest_end);
     }
     events.retain(|e| e.end >= now);
-    *next = events.iter().find(|e| e.end >= now).cloned();
+    *next = select_current(events, now);
+}
+
+/// Choose the event the widget should track (icon busy-state, progress wedge,
+/// label). A currently-running event always beats an upcoming one. When several
+/// events overlap right now, the most *specific* commitment primes: the one that
+/// started latest, and — on equal starts — the shortest. So an accepted
+/// 10:00-10:30 slot nested inside a 09:00-12:00 block wins while it's live, then
+/// the outer block takes over again once the inner one ends.
+fn select_current(events: &[Event], now: DateTime<Utc>) -> Option<Event> {
+    let running = events
+        .iter()
+        .filter(|e| e.start <= now && e.end >= now)
+        .max_by(|a, b| {
+            a.start
+                .cmp(&b.start)
+                .then_with(|| (b.end - b.start).cmp(&(a.end - a.start)))
+        });
+    if let Some(ev) = running {
+        return Some(ev.clone());
+    }
+    // Nothing running: fall back to the next upcoming event by start time.
+    events.iter().find(|e| e.start > now).cloned()
 }
 
 fn prune_notified(events: &[Event], notified: &mut HashSet<String>) {
@@ -871,6 +893,56 @@ mod tests {
         assert_eq!(next.as_ref().map(|e| e.id.as_str()), Some("now-running"));
         assert_eq!(events.len(), 2);
         assert_eq!(idle_since, Some(ts(-1, 0)));
+    }
+
+    #[test]
+    fn nested_event_primes_over_overlapping_broad_event() {
+        // 09:00-12:00 broad block with an accepted 10:00-10:30 slot nested in it.
+        let now = ts(0, 0);
+        let mut broad = ev("broad", 0, 0);
+        broad.start = now - Duration::hours(1);
+        broad.end = now + Duration::hours(2);
+        let mut nested = ev("nested", 0, 0);
+        nested.start = now - Duration::minutes(10);
+        nested.end = now + Duration::minutes(20);
+
+        let mut events = vec![broad.clone(), nested.clone()];
+        let mut next = None;
+        let mut idle_since = None;
+        recompute_next(&mut events, &mut next, &mut idle_since, now);
+        // The nested, later-starting slot primes while it is live.
+        assert_eq!(next.as_ref().map(|e| e.id.as_str()), Some("nested"));
+
+        // After the nested slot ends, the broad block takes over again.
+        let after = nested.end + Duration::minutes(1);
+        recompute_next(&mut events, &mut next, &mut idle_since, after);
+        assert_eq!(next.as_ref().map(|e| e.id.as_str()), Some("broad"));
+    }
+
+    #[test]
+    fn overlapping_running_events_break_ties_by_shortest() {
+        let now = ts(0, 0);
+        let mut long = ev("long", 0, 0);
+        long.start = now - Duration::minutes(30);
+        long.end = now + Duration::hours(2);
+        let mut short = ev("short", 0, 0);
+        short.start = now - Duration::minutes(30); // same start
+        short.end = now + Duration::minutes(15); // shorter
+        let events = vec![long, short];
+        assert_eq!(
+            select_current(&events, now).map(|e| e.id),
+            Some("short".to_owned())
+        );
+    }
+
+    #[test]
+    fn select_current_falls_back_to_next_upcoming_when_idle() {
+        let now = ts(0, 0);
+        let events = vec![ev("soon", 1, 2), ev("later", 3, 4)];
+        assert_eq!(
+            select_current(&events, now).map(|e| e.id),
+            Some("soon".to_owned())
+        );
     }
 
     #[test]
