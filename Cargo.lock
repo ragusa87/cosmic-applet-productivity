@@ -1096,7 +1096,6 @@ dependencies = [
  "libcosmic",
  "regex",
  "serde",
- "smithay-client-toolkit",
  "tokio",
  "tracing",
  "tracing-subscriber",
