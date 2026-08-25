@@ -72,10 +72,14 @@ fn provider_card(
     let now = chrono::Utc::now();
     let military = military_time();
 
-    let header = Row::new()
+    let mut header = Row::new()
         .align_y(Alignment::Center)
         .spacing(8)
-        .push(text::body(snapshot.provider.display_name()).font(cosmic::font::bold()))
+        .push(text::body(snapshot.provider.display_name()).font(cosmic::font::bold()));
+    if let Some(model) = snapshot.model.as_deref() {
+        header = header.push(text::caption(model));
+    }
+    let header = header
         .push(
             cosmic::widget::Space::new()
                 .width(Length::Fill)

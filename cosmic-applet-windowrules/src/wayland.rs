@@ -26,7 +26,10 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, QueueHandle, WEnum, globals::registry_queue_init, protocol::wl_output,
 };
-use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1;
+use wayland_protocols::ext::{
+    foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1,
+    workspace::v1::client::ext_workspace_handle_v1,
+};
 
 /// Snapshot of a workspace exposed to the UI/applet side. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -35,6 +38,16 @@ pub struct WorkspaceSnapshot {
     pub index: u32,
     pub output_name: Option<String>,
     pub is_pinned: bool,
+    /// The workspace the user is currently looking at (one per output).
+    pub is_active: bool,
+}
+
+/// A workspace a toplevel currently sits on, located by output and per-output
+/// index (same ordering as `WorkspaceSnapshot.index`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TlWorkspace {
+    pub output_name: Option<String>,
+    pub index: u32,
 }
 
 /// Snapshot of a window exposed to the UI/applet side.
@@ -43,6 +56,8 @@ pub struct ToplevelSnapshot {
     pub identifier: String,
     pub app_id: String,
     pub title: String,
+    /// Workspace assignment(s): empty = not yet known, >1 = sticky.
+    pub workspaces: Vec<TlWorkspace>,
 }
 
 bitflags! {
@@ -256,7 +271,9 @@ struct AppData {
 impl AppData {
     fn emit_snapshot(&mut self) {
         let workspaces = collect_workspaces(&self.workspace_state, &self.outputs_by_proxy);
-        let toplevels = collect_toplevels(&self.toplevel_info_state);
+        #[allow(clippy::mutable_key_type)] // proxy keys: see comment on collect_workspaces
+        let ws_map = workspace_locations(&self.workspace_state, &self.outputs_by_proxy);
+        let toplevels = collect_toplevels(&self.toplevel_info_state, &ws_map);
         let _ = self.event_tx.send(WlEvent::Snapshot {
             caps: self.caps,
             workspaces,
@@ -395,25 +412,79 @@ fn collect_workspaces(
         // constant because the bindings are auto-generated and the variant
         // name has shifted across versions.
         let pinned_bit = zcosmic_workspace_handle_v2::State::from_bits_truncate(1);
+        // `active` is bit 0 of the upstream ext_workspace_handle_v1 state
+        // bitfield (active = 0x1, urgent = 0x2, hidden = 0x4).
+        let active_bit = ext_workspace_handle_v1::State::from_bits_truncate(1);
         for (idx, w) in ws.iter().enumerate() {
             out.push(WorkspaceSnapshot {
                 name: w.name.clone(),
                 index: u32::try_from(idx).unwrap_or(0),
                 output_name: output_name.clone(),
                 is_pinned: w.cosmic_state.contains(pinned_bit),
+                is_active: w.state.contains(active_bit),
             });
         }
     }
     out
 }
 
-fn collect_toplevels(state: &ToplevelInfoState) -> Vec<ToplevelSnapshot> {
+/// Locate every workspace as `(output_name, per-output index)`, keyed by its
+/// ext handle. Groups are sorted by `coordinates` — exactly the sort used in
+/// `collect_workspaces` and `find_workspace`, so indices agree everywhere.
+#[allow(clippy::mutable_key_type)] // proxy keys: see comment on collect_workspaces
+fn workspace_locations(
+    state: &WorkspaceState,
+    outputs_by_proxy: &HashMap<wl_output::WlOutput, String>,
+) -> HashMap<ext_workspace_handle_v1::ExtWorkspaceHandleV1, TlWorkspace> {
+    let mut map = HashMap::new();
+    for group in state.workspace_groups() {
+        let mut ws: Vec<_> = state
+            .workspaces()
+            .filter(|w| group.workspaces.contains(&w.handle))
+            .collect();
+        ws.sort_by(|a, b| a.coordinates.cmp(&b.coordinates));
+        let output_name = group
+            .outputs
+            .first()
+            .and_then(|o| outputs_by_proxy.get(o).cloned());
+        for (idx, w) in ws.iter().enumerate() {
+            map.insert(
+                w.handle.clone(),
+                TlWorkspace {
+                    output_name: output_name.clone(),
+                    index: u32::try_from(idx).unwrap_or(0),
+                },
+            );
+        }
+    }
+    map
+}
+
+#[allow(clippy::mutable_key_type)] // proxy keys: see comment on collect_workspaces
+fn toplevel_workspaces(
+    workspace_handles: &std::collections::HashSet<ext_workspace_handle_v1::ExtWorkspaceHandleV1>,
+    ws_map: &HashMap<ext_workspace_handle_v1::ExtWorkspaceHandleV1, TlWorkspace>,
+) -> Vec<TlWorkspace> {
+    let mut ws: Vec<TlWorkspace> = workspace_handles
+        .iter()
+        .filter_map(|h| ws_map.get(h).cloned())
+        .collect();
+    ws.sort_by(|a, b| (&a.output_name, a.index).cmp(&(&b.output_name, b.index)));
+    ws
+}
+
+#[allow(clippy::mutable_key_type)] // proxy keys: see comment on collect_workspaces
+fn collect_toplevels(
+    state: &ToplevelInfoState,
+    ws_map: &HashMap<ext_workspace_handle_v1::ExtWorkspaceHandleV1, TlWorkspace>,
+) -> Vec<ToplevelSnapshot> {
     state
         .toplevels()
         .map(|t| ToplevelSnapshot {
             identifier: t.identifier.clone(),
             app_id: t.app_id.clone(),
             title: t.title.clone(),
+            workspaces: toplevel_workspaces(&t.workspace, ws_map),
         })
         .collect()
 }
@@ -521,10 +592,13 @@ impl ToplevelInfoHandler for AppData {
                 title = %info.title,
                 "wl: new_toplevel"
             );
+            #[allow(clippy::mutable_key_type)] // proxy keys: see comment on collect_workspaces
+            let ws_map = workspace_locations(&self.workspace_state, &self.outputs_by_proxy);
             let snap = ToplevelSnapshot {
                 identifier: info.identifier.clone(),
                 app_id: info.app_id.clone(),
                 title: info.title.clone(),
+                workspaces: toplevel_workspaces(&info.workspace, &ws_map),
             };
             let _ = self.event_tx.send(WlEvent::NewToplevel(snap));
         }

@@ -5,6 +5,7 @@ use cosmic::iced::{Limits, Subscription, window::Id};
 use cosmic::surface::{self, action::LiveSettings, action::destroy_popup};
 use cosmic::widget::{Column, button, text};
 
+use crate::cap_exceptions::{ExceptionMatcher, cap_exempt};
 use crate::config::{APP_ID, Config};
 use crate::models::Rule;
 use crate::wayland::{
@@ -23,6 +24,9 @@ pub struct AppModel {
     caps: ManagerCaps,
     sender: Option<WlSender>,
     menu_popup: Option<Id>,
+    cap: crate::cap::CapPlanner,
+    /// Compiled from `config.cap_exceptions`; rebuilt on config updates.
+    cap_exceptions: ExceptionMatcher,
 }
 
 #[derive(Debug, Clone)]
@@ -53,15 +57,19 @@ impl cosmic::Application for AppModel {
     }
 
     fn init(core: cosmic::Core, _flags: Self::Flags) -> (Self, Task<Self::Message>) {
+        let config = Config::load();
+        let cap_exceptions = ExceptionMatcher::new(&config.cap_exceptions);
         (
             Self {
                 core,
-                config: Config::load(),
+                config,
                 workspaces: Vec::new(),
                 toplevels: Vec::new(),
                 caps: ManagerCaps::empty(),
                 sender: None,
                 menu_popup: None,
+                cap: crate::cap::CapPlanner::default(),
+                cap_exceptions,
             },
             Task::none(),
         )
@@ -142,14 +150,36 @@ impl cosmic::Application for AppModel {
                     self.menu_popup = None;
                 }
             }
-            Message::OverviewResult(Ok(())) => {}
+            Message::OverviewResult(Ok(())) | Message::NoOp => {}
             Message::OverviewResult(Err(e)) => {
                 tracing::warn!(error = %e, "failed to open workspace overview");
             }
             Message::UpdateConfig(config) => {
+                let cap_changed = (
+                    self.config.cap_enabled,
+                    self.config.cap_max_windows,
+                    self.config.cap_only_place_new,
+                    &self.config.cap_exceptions,
+                ) != (
+                    config.cap_enabled,
+                    config.cap_max_windows,
+                    config.cap_only_place_new,
+                    &config.cap_exceptions,
+                );
+                if self.config.cap_exceptions != config.cap_exceptions {
+                    self.cap_exceptions = ExceptionMatcher::new(&config.cap_exceptions);
+                }
                 self.config = config;
+                if cap_changed {
+                    // Drop queue/in-flight state from the previous settings;
+                    // when (still) enabled, immediately converge under the
+                    // new ones (e.g. re-pack existing stacked windows).
+                    self.cap.reset();
+                    if self.config.cap_enabled {
+                        self.run_cap_step();
+                    }
+                }
             }
-            Message::NoOp => {}
         }
         Task::none()
     }
@@ -180,6 +210,9 @@ impl AppModel {
                     toplevels = self.toplevels.len(),
                     "applet: snapshot received"
                 );
+                if self.config.cap_enabled {
+                    self.run_cap_step();
+                }
             }
             WlEvent::NewToplevel(snap) => {
                 // Upsert into self.toplevels so "Apply all rules" sees the
@@ -193,7 +226,23 @@ impl AppModel {
                 } else {
                     self.toplevels.push(snap.clone());
                 }
-                self.handle_new_toplevel(&snap);
+                if self.config.cap_enabled {
+                    // Experimental cap mode fully overrides rules: the window
+                    // is queued for capacity-based placement instead. Exempt
+                    // windows (dialogs, title-less popups) are left alone.
+                    if cap_exempt(&self.cap_exceptions, &snap.app_id, &snap.title) {
+                        tracing::info!(
+                            app_id = %snap.app_id,
+                            title = %snap.title,
+                            "cap: window exempt; leaving in place"
+                        );
+                    } else {
+                        self.cap.note_new(&snap.identifier);
+                    }
+                    self.run_cap_step();
+                } else {
+                    self.handle_new_toplevel(&snap);
+                }
             }
         }
         Task::none()
@@ -246,24 +295,65 @@ impl AppModel {
         }
     }
 
-    /// Pick the rule to apply to `snap`. Rules matching the same window form an
-    /// ordered fallback list: prefer the first (top-most) whose target monitor
-    /// is currently connected, so "workspace 1 on the external screen" wins when
-    /// it's plugged in and "workspace 1 on the laptop panel" takes over when it
-    /// isn't. If none of the targets' monitors are present, fall back to the
-    /// first match (best effort — the move may silently no-op, as before).
+    /// Advance the "cap windows per workspace" convergence loop by one batch
+    /// of moves. Called on every snapshot (and on new-toplevel/enable) while
+    /// the experimental option is on; each executed batch produces a fresh
+    /// snapshot, which drives the next step.
+    fn run_cap_step(&mut self) {
+        let opts = crate::cap::CapOptions {
+            max_windows: self.config.cap_max_windows.max(1),
+            only_place_new: self.config.cap_only_place_new,
+        };
+        // Exempt windows are never planned: not counted toward any
+        // workspace's cap, never evicted or compacted. (A queued window that
+        // later turns exempt is dropped by the planner's gc.) They are still
+        // passed along so their workspaces read as occupied, not as gaps.
+        let (eligible, exempt): (Vec<ToplevelSnapshot>, Vec<ToplevelSnapshot>) = self
+            .toplevels
+            .iter()
+            .cloned()
+            .partition(|t| !cap_exempt(&self.cap_exceptions, &t.app_id, &t.title));
+        let moves = self.cap.step(&eligible, &exempt, &self.workspaces, &opts);
+        if moves.is_empty() {
+            return;
+        }
+        let Some(sender) = self.sender.as_ref() else {
+            tracing::warn!("cap: no wayland sender; cannot dispatch moves");
+            return;
+        };
+        for mv in moves {
+            tracing::info!(
+                identifier = %mv.identifier,
+                target_index = mv.target_index,
+                output = ?mv.output,
+                activate = mv.activate,
+                "cap: moving window"
+            );
+            let workspace = WorkspaceRef::Index(mv.target_index);
+            sender.send(WlCommand::MoveToplevelToWorkspace {
+                toplevel: crate::wayland::ToplevelRef(mv.identifier),
+                workspace: workspace.clone(),
+                output: mv.output.clone(),
+            });
+            if mv.activate {
+                sender.send(WlCommand::ActivateWorkspace {
+                    workspace,
+                    output: mv.output,
+                });
+            }
+        }
+    }
+
+    /// Pick the rule to apply to `snap`. Thin wrapper over the shared,
+    /// unit-tested [`crate::decide::select_rule`] so the applet and the
+    /// `--debug` explainer make identical decisions.
     fn select_rule(&self, snap: &ToplevelSnapshot) -> Option<&Rule> {
-        let matches: Vec<&Rule> = self
-            .config
-            .rules
-            .iter()
-            .filter(|r| r.matches(&snap.app_id, &snap.title))
-            .collect();
-        matches
-            .iter()
-            .copied()
-            .find(|r| output_available(r, &self.workspaces))
-            .or_else(|| matches.first().copied())
+        crate::decide::select_rule(
+            &self.config.rules,
+            &self.workspaces,
+            &snap.app_id,
+            &snap.title,
+        )
     }
 
     fn toggle_menu_popup(&mut self) -> Task<Message> {
@@ -323,18 +413,6 @@ impl AppModel {
             "applet: apply all rules"
         );
         close
-    }
-}
-
-/// Whether `rule`'s target monitor is currently connected. A rule with no
-/// `target_output` is always "available"; one that names an output requires
-/// that output to currently expose at least one workspace.
-fn output_available(rule: &Rule, workspaces: &[WorkspaceSnapshot]) -> bool {
-    match &rule.target_output {
-        None => true,
-        Some(out) => workspaces
-            .iter()
-            .any(|w| w.output_name.as_deref() == Some(out.as_str())),
     }
 }
 

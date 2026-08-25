@@ -50,6 +50,9 @@ pub struct ProviderSnapshot {
     pub spend: Option<SpendInfo>,
     /// Active scoped limits (per-model/per-surface), each rendered as its own bar.
     pub scoped: Vec<ScopedLimit>,
+    /// Currently-configured model for this provider, read from the local CLI
+    /// config (raw config string). `None` when unset or unreadable.
+    pub model: Option<String>,
 }
 
 impl ProviderSnapshot {
@@ -151,6 +154,7 @@ mod tests {
             weekly,
             spend,
             scoped: Vec::new(),
+            model: None,
         }
     }
 

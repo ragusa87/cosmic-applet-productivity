@@ -373,6 +373,7 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> Result<ProviderSnapshot
         weekly,
         spend,
         scoped,
+        model: crate::model_config::anthropic_model(),
     })
 }
 

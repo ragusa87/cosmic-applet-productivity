@@ -2,6 +2,7 @@ mod anthropic;
 mod app;
 mod atomic;
 mod config;
+mod model_config;
 mod models;
 mod openai;
 mod settings;
