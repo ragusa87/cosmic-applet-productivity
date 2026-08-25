@@ -8,6 +8,7 @@ members = [
     "cosmic-applet-slack",
     "cosmic-applet-quotabar",
     "cosmic-applet-windowrules",
+    "cosmic-applet-falcon",
 ]
 
 [workspace.package]

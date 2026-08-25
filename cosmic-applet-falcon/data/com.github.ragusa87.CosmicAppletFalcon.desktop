@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Falcon Sensor
+Comment=Show and control the CrowdStrike Falcon sensor service from the COSMIC panel
+Exec=cosmic-applet-falcon
+Icon=com.github.ragusa87.CosmicAppletFalcon
+Terminal=false
+Categories=COSMIC;X-COSMIC-Applet;
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=2

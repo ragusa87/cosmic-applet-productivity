@@ -977,6 +977,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosmic-applet-falcon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "libcosmic",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+]
+
+[[package]]
 name = "cosmic-applet-gmail"
 version = "0.1.0"
 dependencies = [

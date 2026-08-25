@@ -1,0 +1,25 @@
+[package]
+name = "cosmic-applet-falcon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "COSMIC panel applet that shows the CrowdStrike Falcon sensor status and starts/stops it via systemd + polkit"
+repository = "https://github.com/ragusa87/cosmic-applet-productivity"
+
+[[bin]]
+name = "cosmic-applet-falcon"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zbus = { workspace = true }
+
+libcosmic = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

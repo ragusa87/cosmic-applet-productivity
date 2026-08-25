@@ -15,6 +15,7 @@ A bundle of COSMIC desktop panel applets:
 | [Slack Unread](#slack-applet) | `cosmic-applet-slack` | Badge mirroring Slack's tray-icon ToolTip — pulled over DBus, no Slack API, no token. |![slack-preview.png](cosmic-applet-slack/slack-preview.png)|
 | [AI Quota Bar](#quotabar-applet) | `cosmic-applet-quotabar` | OpenAI + Anthropic API token usage (5h / weekly) read from local OAuth sessions. Port of the Swift [`QuotaBar`](https://github.com/Jonathanm10/QuotaBar) project, MIT-licensed. |![quotabar-preview.png](cosmic-applet-quotabar/quotabar-preview.png)|
 | [Window Rules](#window-rules-applet) | `cosmic-applet-windowrules` | Assigns windows to a chosen workspace by `app_id` on first appearance — COSMIC counterpart of KDE's KWin Window Rules. |![windowrules-preview.png](cosmic-applet-windowrules/windowrules-preview.png)|
+| [Falcon Sensor](#falcon-sensor-applet) | `cosmic-applet-falcon` | CrowdStrike Falcon sensor indicator — colored while `falcon-sensor.service` runs, grey when stopped — with Start / Stop / Restart via systemd D-Bus + polkit (no sudo). |![falcon icon](cosmic-applet-falcon/data/icons/com.github.ragusa87.CosmicAppletFalcon.svg)|
 
 Jump to a per-applet section below for what each one shows, how to
 configure it, and the troubleshooting knobs. Contributors / AI agents:
@@ -70,8 +71,8 @@ installed:
 1. **Settings → Desktop → Panel** (or right-click the panel → *Configure*).
 2. Scroll to **Applets** → **Add Applet**.
 3. Pick **Gmail Unread**, **Next meeting**, **Taxi tracker**,
-   **Slack Unread**, and/or **AI Quota Bar** from the list and drag it
-   into Left, Center, or Right.
+   **Slack Unread**, **AI Quota Bar**, and/or **Falcon Sensor** from the
+   list and drag it into Left, Center, or Right.
 
 If the entry does not appear in the Add-Applet list, the panel has cached
 its applet index. Force a re-scan with one of:
@@ -622,6 +623,46 @@ warning will go away on its own.
 **Requirements** — a recent COSMIC desktop (cosmic-comp ≥ 1.0
 exposing `ext-workspace-v1` + the v4 toplevel-management protocol).
 Nothing else.
+
+## Falcon Sensor applet
+
+`cosmic-applet-falcon` shows whether the CrowdStrike Falcon sensor
+(`falcon-sensor.service`) is running and lets you start / stop /
+restart it from the panel — no terminal, no `sudo`.
+
+**What you see** — the crow icon is colored (red) while the sensor is
+active and monochrome/grey when it isn't. A small badge appears on top
+of the icon when the unit is `failed` (red `!`) or transitioning
+(amber `•` while activating / deactivating).
+
+**Click** (left or right) opens a popup showing:
+
+- the systemd unit state — `active (running)`, `inactive (dead)`,
+  `failed`, …
+- the actual falcon processes found by scanning `/proc` (`falcond`,
+  `falcon-sensor-bpf`) — an independent confirmation of the service
+  state, equivalent to `ps -ef | grep falcon`,
+- the unit-file state (`enabled` / `disabled`),
+- **Start** / **Stop** / **Restart** buttons.
+
+**How it controls the service** — the applet never shells out to
+`sudo systemctl`. It calls `StartUnit` / `StopUnit` / `RestartUnit` on
+`org.freedesktop.systemd1` over the system bus with the D-Bus
+*allow-interactive-authorization* flag set, so polkit shows the regular
+graphical authentication dialog (action
+`org.freedesktop.systemd1.manage-units`). Dismissing the dialog leaves
+the service untouched and the popup shows *Not authorized*.
+
+**Status sources** — the unit's `ActiveState` / `SubState` are polled
+over D-Bus every 5 s (every 1 s while the unit is activating or
+deactivating), plus the `/proc` scan above. `pkill -USR2
+cosmic-applet-falcon` forces an immediate re-poll.
+
+**Debugging** — `cosmic-applet-falcon --debug` prints the unit state,
+the unit-file state, and the `/proc` scan result, then exits (no GUI).
+
+No configuration, no settings window, no secrets. The unit name is
+hardcoded to `falcon-sensor.service`.
 
 ## Troubleshooting
 

@@ -30,8 +30,8 @@ the full text and copyright notices.
 
 ## Icons
 
-Both panel icons are from [Simple Icons](https://simpleicons.org/) and are
-licensed under
+The Gmail and Agenda panel icons are from
+[Simple Icons](https://simpleicons.org/) and are licensed under
 [CC0 1.0 Universal](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md):
 
 - `cosmic-applet-gmail/data/icons/com.github.ragusa87.CosmicAppletGmail.svg`
@@ -39,3 +39,11 @@ licensed under
 - `cosmic-applet-google-agenda/data/icons/com.github.ragusa87.CosmicAppletGoogleAgenda.svg`
   — Google Calendar icon
   ([Simple Icons / Google Calendar](https://simpleicons.org/?q=google+calendar)).
+
+The Falcon applet icon
+(`cosmic-applet-falcon/data/icons/com.github.ragusa87.CosmicAppletFalcon.svg`)
+is the [crow icon](https://fontawesome.com/icons/crow?f=classic&s=solid)
+from [Font Awesome Free](https://fontawesome.com/license/free) 6.7.2,
+© Fonticons, Inc., licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), recolored red.
+The license notice is also embedded in the SVG file itself.
