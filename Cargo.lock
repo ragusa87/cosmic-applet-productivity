@@ -1096,7 +1096,7 @@ dependencies = [
  "libcosmic",
  "regex",
  "serde",
- "smithay-client-toolkit",
+ "smithay-client-toolkit 0.21.1",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1114,7 +1114,7 @@ dependencies = [
  "bitflags 2.13.1",
  "cosmic-protocols 0.2.0 (git+https://github.com/pop-os/cosmic-protocols?rev=32283d7)",
  "libc",
- "smithay-client-toolkit",
+ "smithay-client-toolkit 0.20.0",
  "wayland-client",
  "wayland-protocols",
 ]
@@ -1127,7 +1127,7 @@ dependencies = [
  "bitflags 2.13.1",
  "cosmic-protocols 0.2.0 (git+https://github.com/pop-os/cosmic-protocols.git)",
  "libc",
- "smithay-client-toolkit",
+ "smithay-client-toolkit 0.20.0",
  "wayland-client",
  "wayland-protocols",
 ]
@@ -1200,7 +1200,7 @@ dependencies = [
  "anyhow",
  "cosmic-config",
  "serde",
- "smithay-client-toolkit",
+ "smithay-client-toolkit 0.20.0",
  "tracing",
  "wayland-protocols-wlr",
  "xdg-shell-wrapper-config",
@@ -1571,7 +1571,7 @@ dependencies = [
  "bitflags 2.13.1",
  "mime 0.1.0",
  "raw-window-handle",
- "smithay-client-toolkit",
+ "smithay-client-toolkit 0.20.0",
  "smithay-clipboard",
 ]
 
@@ -5031,7 +5031,7 @@ dependencies = [
  "ab_glyph",
  "log",
  "memmap2 0.9.11",
- "smithay-client-toolkit",
+ "smithay-client-toolkit 0.20.0",
  "tiny-skia 0.12.0",
 ]
 
@@ -5320,7 +5320,35 @@ dependencies = [
  "wayland-csd-frame",
  "wayland-cursor",
  "wayland-protocols",
- "wayland-protocols-experimental",
+ "wayland-protocols-experimental 20250721.0.1",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
+ "wayland-scanner",
+ "xkbcommon 0.8.0",
+ "xkeysym",
+]
+
+[[package]]
+name = "smithay-client-toolkit"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74dc9ee14b0fdcb535f9556141bacac070c994a977d2240ee455d7438a617f00"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytemuck",
+ "calloop",
+ "calloop-wayland-source",
+ "cursor-icon",
+ "log",
+ "memmap2 0.9.11",
+ "pkg-config",
+ "rustix 1.1.4",
+ "thiserror 2.0.19",
+ "wayland-client",
+ "wayland-csd-frame",
+ "wayland-cursor",
+ "wayland-protocols",
+ "wayland-protocols-experimental 20251230.0.3",
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
  "wayland-scanner",
@@ -5335,7 +5363,7 @@ source = "git+https://github.com/pop-os/smithay-clipboard?tag=sctk-0.20#859b02c8
 dependencies = [
  "libc",
  "raw-window-handle",
- "smithay-client-toolkit",
+ "smithay-client-toolkit 0.20.0",
  "wayland-backend",
 ]
 
@@ -6308,6 +6336,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayland-protocols-experimental"
+version = "20251230.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91c6c3e7178e553d093d46999032bc79aafea9dedd71dd702c8ace7bbc25cf13"
+dependencies = [
+ "bitflags 2.13.1",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-scanner",
+]
+
+[[package]]
 name = "wayland-protocols-misc"
 version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7209,7 +7250,7 @@ dependencies = [
  "raw-window-handle",
  "rustix 1.1.4",
  "sctk-adwaita",
- "smithay-client-toolkit",
+ "smithay-client-toolkit 0.20.0",
  "smol_str",
  "tracing",
  "wayland-backend",
