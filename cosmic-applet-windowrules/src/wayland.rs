@@ -18,7 +18,11 @@ use cosmic_protocols::{
     toplevel_management::v1::client::zcosmic_toplevel_manager_v1,
     workspace::v2::client::zcosmic_workspace_handle_v2,
 };
-use smithay_client_toolkit::{
+// smithay-client-toolkit is used via cosmic-client-toolkit's re-export (`sctk`)
+// rather than as a direct dependency. This guarantees we compile against the
+// exact same version cctk does, so the cosmic-protocol types (RegistryState,
+// OutputState, ...) always match and can't split into two incompatible copies.
+use cosmic_client_toolkit::sctk::{
     output::{OutputHandler, OutputState},
     reexports::{calloop, calloop_wayland_source::WaylandSource},
     registry::{ProvidesRegistryState, RegistryState},
@@ -536,7 +540,7 @@ impl ProvidesRegistryState for AppData {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
-    smithay_client_toolkit::registry_handlers!(OutputState);
+    cosmic_client_toolkit::sctk::registry_handlers!(OutputState);
 }
 
 impl OutputHandler for AppData {
@@ -694,8 +698,8 @@ impl WorkspaceHandler for AppData {
 // Tell sctk we don't process zcosmic_toplevel_handle_v1 directly — the
 // toolkit's ToplevelInfoState handles it. delegate_toplevel_info! wires that
 // up. Same for the other delegate macros.
-smithay_client_toolkit::delegate_output!(AppData);
-smithay_client_toolkit::delegate_registry!(AppData);
+cosmic_client_toolkit::sctk::delegate_output!(AppData);
+cosmic_client_toolkit::sctk::delegate_registry!(AppData);
 cosmic_client_toolkit::delegate_toplevel_info!(AppData);
 cosmic_client_toolkit::delegate_toplevel_manager!(AppData);
 cosmic_client_toolkit::delegate_workspace!(AppData);
