@@ -31,7 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         settings::run()?;
         return Ok(());
     }
-    cosmic::applet::run::<app::AppModel>(())?;
+    let flags = app::Flags {
+        test_overlay: has_flag("--test-overlay"),
+    };
+    cosmic::applet::run::<app::AppModel>(flags)?;
     Ok(())
 }
 

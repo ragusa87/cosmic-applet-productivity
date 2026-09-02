@@ -1,8 +1,9 @@
 use cosmic::Element;
 use cosmic::applet::menu_button;
+use cosmic::iced::alignment::{Horizontal, Vertical};
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{
-    Column, Row, button, dropdown, scrollable, settings, text, text_input, toggler,
+    Column, Row, button, container, dropdown, scrollable, settings, text, text_input, toggler,
 };
 
 use crate::app::Message;
@@ -40,6 +41,109 @@ impl CredentialsForm {
     pub fn is_complete(&self) -> bool {
         !self.email.is_empty() && !self.client_id.is_empty() && !self.client_secret.is_empty()
     }
+}
+
+/// Symbolic bell glyph shown on the meeting overlay. Single-path `currentColor`
+/// SVG so libcosmic recolors it to the active theme rather than a fixed brand
+/// color — keeps the overlay sober and theme-native.
+const OVERLAY_ICON_SVG: &[u8] = include_bytes!("../data/icons/meeting-overlay-symbolic.svg");
+
+/// Content shown on the full-screen meeting overlay. Kept as plain strings so
+/// the same view serves both a real reminder (built from the upcoming event via
+/// [`OverlayContent::from_event`]) and the `--test-overlay` dry run, which has
+/// no calendar event to draw from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlayContent {
+    pub title: String,
+    pub countdown: String,
+    pub time: Option<String>,
+}
+
+impl OverlayContent {
+    /// Build the overlay copy from the upcoming event and the current time.
+    pub fn from_event(ev: &Event, now: chrono::DateTime<chrono::Utc>) -> Self {
+        let mins = (ev.start - now).num_minutes();
+        let countdown = if mins <= 0 {
+            "Starting now".to_owned()
+        } else if mins == 1 {
+            "Starting in 1 minute".to_owned()
+        } else {
+            format!("Starting in {mins} minutes")
+        };
+        let start = ev.start.with_timezone(&chrono::Local);
+        let end = ev.end.with_timezone(&chrono::Local);
+        Self {
+            title: ev.summary.clone(),
+            countdown,
+            time: Some(format!(
+                "{} \u{2013} {}",
+                start.format("%H:%M"),
+                end.format("%H:%M")
+            )),
+        }
+    }
+
+    /// Placeholder content for the `--test-overlay` CLI flag.
+    pub fn test() -> Self {
+        Self {
+            title: "Team standup".to_owned(),
+            countdown: "Starting in 5 minutes".to_owned(),
+            time: Some("10:30 \u{2013} 10:45".to_owned()),
+        }
+    }
+}
+
+/// Full-screen reminder rendered on a layer-shell overlay when a meeting is
+/// about to start. `None` is tolerated so the view renders harmlessly during
+/// the brief window between dismissing the overlay and the surface being torn
+/// down.
+pub fn meeting_overlay_view(content: Option<&OverlayContent>) -> Element<'_, Message> {
+    let Some(content) = content else {
+        return container(text::body("")).into();
+    };
+
+    let icon = cosmic::widget::icon(
+        cosmic::widget::icon::from_svg_bytes(OVERLAY_ICON_SVG.to_vec()).symbolic(true),
+    )
+    .size(56)
+    .class(cosmic::theme::Svg::Custom(std::rc::Rc::new(|theme| {
+        cosmic::widget::svg::Style {
+            color: Some(theme.cosmic().accent_color().into()),
+        }
+    })));
+
+    let mut details = Column::new()
+        .align_x(Alignment::Center)
+        .spacing(6)
+        .push(text::title1(content.title.clone()))
+        .push(text::title3(content.countdown.clone()).class(cosmic::theme::Text::Accent));
+    if let Some(time) = content.time.as_deref() {
+        details = details.push(text::body(time.to_owned()));
+    }
+
+    let actions = Row::new()
+        .spacing(12)
+        .push(button::standard("Snooze 1 min").on_press(Message::SnoozeOverlay))
+        .push(button::suggested("Dismiss").on_press(Message::DismissOverlay));
+
+    let card = Column::new()
+        .align_x(Alignment::Center)
+        .spacing(28)
+        .push(icon)
+        .push(details)
+        .push(actions);
+
+    let framed = container(card.padding([44, 64]))
+        .class(cosmic::theme::Container::Card)
+        .max_width(560.0);
+
+    container(framed)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Horizontal::Center)
+        .align_y(Vertical::Center)
+        .class(cosmic::theme::Container::WindowBackground)
+        .into()
 }
 
 pub fn menu_view<'a>(effective_paused: bool) -> Element<'a, Message> {
@@ -148,6 +252,7 @@ pub struct SettingsHandlers<M: Clone> {
     pub on_toggle_show_time: fn(bool) -> M,
     pub on_toggle_show_progress: fn(bool) -> M,
     pub on_toggle_notify: fn(bool) -> M,
+    pub on_toggle_show_meeting_overlay: fn(bool) -> M,
     pub on_toggle_disable_during_weekend: fn(bool) -> M,
     pub on_lead_change: fn(usize) -> M,
     pub on_try_notify: M,
@@ -162,6 +267,7 @@ pub fn settings_view<'a, M: Clone + 'static>(
     show_time: bool,
     show_progress: bool,
     notify: bool,
+    show_meeting_overlay: bool,
     notification_lead_secs: u32,
     disable_during_weekend: bool,
     status: &'a Status,
@@ -232,8 +338,23 @@ pub fn settings_view<'a, M: Clone + 'static>(
         .add(settings::item(
             "Enable meeting notifications",
             toggler(notify).on_toggle(handlers.on_toggle_notify),
-        ));
-    if notify {
+        ))
+        .add(settings::item_row(vec![
+            Column::new()
+                .spacing(2)
+                .width(Length::Fill)
+                .push(text::body("Show meeting overlay"))
+                .push(text::caption(
+                    "Full-screen reminder when a meeting is about to start",
+                ))
+                .into(),
+            toggler(show_meeting_overlay)
+                .on_toggle(handlers.on_toggle_show_meeting_overlay)
+                .into(),
+        ]));
+    // The lead time drives both the desktop notification and the overlay, so
+    // expose it whenever either is enabled.
+    if notify || show_meeting_overlay {
         let selected = LEAD_PRESETS_SECS
             .iter()
             .position(|&s| s == notification_lead_secs);
@@ -241,6 +362,8 @@ pub fn settings_view<'a, M: Clone + 'static>(
             "Notify before start",
             dropdown(&LEAD_LABELS, selected, handlers.on_lead_change),
         ));
+    }
+    if notify {
         notifications_section = notifications_section.add(settings::item(
             "Preview",
             button::standard("Try notification").on_press(handlers.on_try_notify.clone()),
@@ -271,4 +394,48 @@ pub fn settings_view<'a, M: Clone + 'static>(
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, TimeZone, Utc};
+
+    fn ev(start: chrono::DateTime<Utc>, end: chrono::DateTime<Utc>) -> Event {
+        Event {
+            id: "e1".to_owned(),
+            summary: "Team standup".to_owned(),
+            start,
+            end,
+            meet_url: None,
+            location: None,
+        }
+    }
+
+    #[test]
+    fn overlay_countdown_pluralizes_and_rounds_down() {
+        let now = Utc.with_ymd_and_hms(2026, 5, 12, 9, 55, 30).unwrap();
+        // 4m30s out rounds down to "4 minutes".
+        let start = Utc.with_ymd_and_hms(2026, 5, 12, 10, 0, 0).unwrap();
+        let content = OverlayContent::from_event(&ev(start, start + Duration::minutes(30)), now);
+        assert_eq!(content.title, "Team standup");
+        assert_eq!(content.countdown, "Starting in 4 minutes");
+    }
+
+    #[test]
+    fn overlay_countdown_singular_minute() {
+        let now = Utc.with_ymd_and_hms(2026, 5, 12, 9, 59, 0).unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 5, 12, 10, 0, 0).unwrap();
+        let content = OverlayContent::from_event(&ev(start, start + Duration::minutes(30)), now);
+        assert_eq!(content.countdown, "Starting in 1 minute");
+    }
+
+    #[test]
+    fn overlay_countdown_now_when_started() {
+        let start = Utc.with_ymd_and_hms(2026, 5, 12, 10, 0, 0).unwrap();
+        let now = start; // exactly at start
+        let content = OverlayContent::from_event(&ev(start, start + Duration::minutes(30)), now);
+        assert_eq!(content.countdown, "Starting now");
+        assert!(content.time.is_some());
+    }
 }
