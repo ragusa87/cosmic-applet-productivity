@@ -5,7 +5,9 @@ use cosmic::Element;
 use cosmic::app::Task;
 use cosmic::iced::widget::mouse_area;
 use cosmic::iced::{Limits, Subscription, window::Id};
-use cosmic::surface::{self, action::LiveSettings, action::destroy_popup};
+use cosmic::surface::{
+    self, action::LiveSettings, action::destroy_layer_shell, action::destroy_popup,
+};
 use cosmic::widget::{button, text};
 use cosmic_config::CosmicConfigEntry;
 use futures_util::SinkExt;
@@ -28,6 +30,11 @@ pub struct AppModel {
     pub config: Config,
     pub menu_popup: Option<Id>,
     pub info_popup: Option<Id>,
+    /// Layer-shell surface id of the full-screen meeting overlay while it is
+    /// shown, `None` otherwise. Guards against opening more than one overlay.
+    pub overlay_surface: Option<Id>,
+    /// Copy currently rendered on the overlay. Read by the overlay view closure.
+    pub overlay: Option<ui::OverlayContent>,
     pub tokens: Option<Tokens>,
     pub events: Vec<Event>,
     pub next: Option<Event>,
@@ -96,6 +103,13 @@ impl AppModel {
     }
 }
 
+/// Launch-time options. `test_overlay` is set by the `--test-overlay` CLI flag
+/// to pop the meeting overlay immediately with placeholder content.
+#[derive(Debug, Clone, Default)]
+pub struct Flags {
+    pub test_overlay: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     LeftClick,
@@ -103,6 +117,9 @@ pub enum Message {
     PopupClosed(Id),
     OpenCredentials,
     OpenUrl(String),
+    DismissOverlay,
+    SnoozeOverlay,
+    ReopenOverlay,
 
     Tick,
     Refetch,
@@ -118,7 +135,7 @@ pub enum Message {
 
 impl cosmic::Application for AppModel {
     type Executor = cosmic::executor::Default;
-    type Flags = ();
+    type Flags = Flags;
     type Message = Message;
 
     const APP_ID: &'static str = APP_ID;
@@ -131,7 +148,7 @@ impl cosmic::Application for AppModel {
         &mut self.core
     }
 
-    fn init(core: cosmic::Core, _flags: Self::Flags) -> (Self, Task<Self::Message>) {
+    fn init(core: cosmic::Core, flags: Self::Flags) -> (Self, Task<Self::Message>) {
         let config = cosmic_config::Config::new(Self::APP_ID, Config::VERSION)
             .map(|ctx| match Config::get_entry(&ctx) {
                 Ok(c) => c,
@@ -149,7 +166,7 @@ impl cosmic::Application for AppModel {
         // counts as a paused -> running transition and refetches.
         app.last_paused = app.is_paused();
 
-        let task = if config.is_configured() {
+        let load_tokens = if config.is_configured() {
             let email = config.email.clone();
             cosmic::task::future(async move {
                 let tokens = secrets::load(KEYRING_SERVICE, &email).await.ok();
@@ -159,7 +176,18 @@ impl cosmic::Application for AppModel {
             Task::none()
         };
 
-        (app, task)
+        // `--test-overlay`: show the overlay straight away with placeholder copy
+        // so its look can be checked without waiting for a real meeting.
+        let overlay = if flags.test_overlay {
+            let id = Id::unique();
+            app.overlay_surface = Some(id);
+            app.overlay = Some(ui::OverlayContent::test());
+            open_meeting_overlay(id)
+        } else {
+            Task::none()
+        };
+
+        (app, Task::batch([load_tokens, overlay]))
     }
 
     fn on_close_requested(&self, id: Id) -> Option<Message> {
@@ -315,6 +343,41 @@ impl cosmic::Application for AppModel {
                 if self.info_popup.as_ref() == Some(&id) {
                     self.info_popup = None;
                 }
+                if self.overlay_surface.as_ref() == Some(&id) {
+                    self.overlay_surface = None;
+                    self.overlay = None;
+                }
+            }
+
+            Message::DismissOverlay => {
+                self.overlay = None;
+                if let Some(id) = self.overlay_surface.take() {
+                    return dispatch_surface(destroy_layer_shell(id));
+                }
+            }
+
+            Message::SnoozeOverlay => {
+                // Keep the overlay content but tear down the surface, then
+                // re-show the same reminder one minute later.
+                let destroy = self
+                    .overlay_surface
+                    .take()
+                    .map_or_else(Task::none, |id| dispatch_surface(destroy_layer_shell(id)));
+                let reopen = cosmic::task::future(async {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    Message::ReopenOverlay
+                });
+                return Task::batch([destroy, reopen]);
+            }
+
+            Message::ReopenOverlay => {
+                // Re-show only if the snoozed reminder is still pending and no
+                // newer overlay has taken the screen in the meantime.
+                if self.overlay.is_some() && self.overlay_surface.is_none() {
+                    let id = Id::unique();
+                    self.overlay_surface = Some(id);
+                    return open_meeting_overlay(id);
+                }
             }
 
             Message::OpenUrl(url) => {
@@ -366,18 +429,45 @@ impl cosmic::Application for AppModel {
                 let now = Utc::now();
                 recompute_next(&mut self.events, &mut self.next, &mut self.idle_since, now);
                 prune_notified(&self.events, &mut self.notified);
-                let lead = if self.config.notify {
+
+                // The lead window drives both the desktop notification and the
+                // overlay; compute it whenever either is enabled so the overlay
+                // still fires when notifications are switched off.
+                let notify_on = self.config.notify;
+                let overlay_on = self.config.show_meeting_overlay;
+                let lead = if notify_on || overlay_on {
                     u64::from(self.config.notification_lead_secs)
                 } else {
                     0
                 };
-                maybe_notify(self.next.as_ref(), &mut self.notified, lead, now);
+                let mut overlay_task = Task::none();
+                if let Some(notice) =
+                    decide_notify(self.next.as_ref(), &mut self.notified, lead, now)
+                {
+                    if notify_on {
+                        cosmic_google_common::notify::show(&notice.summary, &notice.body, APP_ID);
+                    }
+                    // One overlay at a time: skip if one is already on screen.
+                    if overlay_on
+                        && self.overlay_surface.is_none()
+                        && let Some(ev) = self.next.as_ref()
+                    {
+                        let id = Id::unique();
+                        self.overlay = Some(ui::OverlayContent::from_event(ev, now));
+                        self.overlay_surface = Some(id);
+                        overlay_task = open_meeting_overlay(id);
+                    }
+                }
                 if resumed {
                     // The pause just ended (weekend rollover, or the setting was
                     // switched off): pull fresh events immediately instead of
                     // showing stale ones until the recreated subscription fires.
-                    return cosmic::task::message(cosmic::Action::App(Message::Refetch));
+                    return Task::batch([
+                        overlay_task,
+                        cosmic::task::message(cosmic::Action::App(Message::Refetch)),
+                    ]);
                 }
+                return overlay_task;
             }
 
             Message::RefreshFromMenu => {
@@ -551,6 +641,51 @@ fn open_info_popup(new_id: Id) -> Task<Message> {
     dispatch_surface(action)
 }
 
+/// Layer-shell settings for the meeting overlay: a top-most surface anchored to
+/// every edge so it fills the output, drawn above panels (`exclusive_zone = -1`).
+fn overlay_settings(
+    id: Id,
+) -> cosmic::iced::runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings {
+    use cosmic::cctk::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
+    use cosmic::iced::runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
+
+    SctkLayerSurfaceSettings {
+        id,
+        layer: Layer::Overlay,
+        keyboard_interactivity: KeyboardInteractivity::OnDemand,
+        anchor: Anchor::all(),
+        namespace: "meeting-overlay".to_owned(),
+        size: Some((None, None)),
+        exclusive_zone: -1,
+        ..Default::default()
+    }
+}
+
+fn open_meeting_overlay(id: Id) -> Task<Message> {
+    let action = surface::action::app_layer_shell::<AppModel>(
+        // The overlay fills the whole output, so it must have square corners.
+        // Force a zero corner radius: libcosmic otherwise auto-applies the
+        // system rounding, which cosmic-comp rejects on a full-screen layer
+        // surface with a fatal `cosmic_corner_radius_layer_v1` protocol error.
+        |_state: &AppModel| LiveSettings {
+            corners: Some(
+                cosmic::iced::runtime::platform_specific::wayland::CornerRadius {
+                    top_left: 0,
+                    top_right: 0,
+                    bottom_left: 0,
+                    bottom_right: 0,
+                },
+            ),
+            ..LiveSettings::default()
+        },
+        move |_state: &mut AppModel| overlay_settings(id),
+        Some(Box::new(|state: &AppModel| {
+            ui::meeting_overlay_view(state.overlay.as_ref()).map(cosmic::Action::App)
+        })),
+    );
+    dispatch_surface(action)
+}
+
 async fn refresh_and_fetch(
     client_id: &str,
     email: &str,
@@ -667,18 +802,6 @@ fn decide_notify(
             ev.start.with_timezone(&chrono::Local).format("%H:%M")
         ),
     })
-}
-
-fn maybe_notify(
-    next: Option<&Event>,
-    notified: &mut HashSet<String>,
-    lead_secs: u64,
-    now: DateTime<Utc>,
-) {
-    let Some(notice) = decide_notify(next, notified, lead_secs, now) else {
-        return;
-    };
-    cosmic_google_common::notify::show(&notice.summary, &notice.body, APP_ID);
 }
 
 struct WedgeBadge {
