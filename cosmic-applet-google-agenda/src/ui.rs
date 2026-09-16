@@ -8,6 +8,7 @@ use cosmic::widget::{
 
 use crate::app::Message;
 use crate::calendar::Event;
+use crate::config::Config;
 
 /// Selectable notification lead times (seconds), paired with `LEAD_LABELS` by
 /// index. Exposed so the settings binary can map a dropdown selection back to
@@ -57,29 +58,47 @@ pub struct OverlayContent {
     pub title: String,
     pub countdown: String,
     pub time: Option<String>,
+    /// Start of the event this overlay reminds about, kept so the countdown can
+    /// be recomputed when the overlay is snoozed and re-shown. `None` for the
+    /// `--test-overlay` placeholder, which has no real event.
+    pub start: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Format the "Starting in …" line for an event `mins` minutes away.
+fn format_countdown(mins: i64) -> String {
+    if mins <= 0 {
+        "Starting now".to_owned()
+    } else if mins == 1 {
+        "Starting in 1 minute".to_owned()
+    } else {
+        format!("Starting in {mins} minutes")
+    }
 }
 
 impl OverlayContent {
     /// Build the overlay copy from the upcoming event and the current time.
     pub fn from_event(ev: &Event, now: chrono::DateTime<chrono::Utc>) -> Self {
         let mins = (ev.start - now).num_minutes();
-        let countdown = if mins <= 0 {
-            "Starting now".to_owned()
-        } else if mins == 1 {
-            "Starting in 1 minute".to_owned()
-        } else {
-            format!("Starting in {mins} minutes")
-        };
-        let start = ev.start.with_timezone(&chrono::Local);
+        let start_local = ev.start.with_timezone(&chrono::Local);
         let end = ev.end.with_timezone(&chrono::Local);
         Self {
             title: ev.summary.clone(),
-            countdown,
+            countdown: format_countdown(mins),
             time: Some(format!(
                 "{} \u{2013} {}",
-                start.format("%H:%M"),
+                start_local.format("%H:%M"),
                 end.format("%H:%M")
             )),
+            start: Some(ev.start),
+        }
+    }
+
+    /// Recompute the countdown line against `now`. Called when a snoozed overlay
+    /// is re-shown so it reflects the time actually remaining, not the time when
+    /// it was first raised. No-op for content without a backing event.
+    pub fn refresh(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        if let Some(start) = self.start {
+            self.countdown = format_countdown((start - now).num_minutes());
         }
     }
 
@@ -89,6 +108,7 @@ impl OverlayContent {
             title: "Team standup".to_owned(),
             countdown: "Starting in 5 minutes".to_owned(),
             time: Some("10:30 \u{2013} 10:45".to_owned()),
+            start: None,
         }
     }
 }
@@ -97,7 +117,11 @@ impl OverlayContent {
 /// about to start. `None` is tolerated so the view renders harmlessly during
 /// the brief window between dismissing the overlay and the surface being torn
 /// down.
-pub fn meeting_overlay_view(content: Option<&OverlayContent>) -> Element<'_, Message> {
+pub fn meeting_overlay_view<'a, M: Clone + 'static>(
+    content: Option<&OverlayContent>,
+    on_snooze: M,
+    on_dismiss: M,
+) -> Element<'a, M> {
     let Some(content) = content else {
         return container(text::body("")).into();
     };
@@ -123,8 +147,8 @@ pub fn meeting_overlay_view(content: Option<&OverlayContent>) -> Element<'_, Mes
 
     let actions = Row::new()
         .spacing(12)
-        .push(button::standard("Snooze 1 min").on_press(Message::SnoozeOverlay))
-        .push(button::suggested("Dismiss").on_press(Message::DismissOverlay));
+        .push(button::standard("Snooze 1 min").on_press(on_snooze))
+        .push(button::suggested("Dismiss").on_press(on_dismiss));
 
     let card = Column::new()
         .align_x(Alignment::Center)
@@ -144,6 +168,46 @@ pub fn meeting_overlay_view(content: Option<&OverlayContent>) -> Element<'_, Mes
         .align_y(Vertical::Center)
         .class(cosmic::theme::Container::WindowBackground)
         .into()
+}
+
+/// Layer-shell settings for the meeting overlay: a top-most surface anchored to
+/// every edge so it fills the output, drawn above panels (`exclusive_zone = -1`).
+/// Shared so both the applet and the settings preview open an identical surface.
+pub fn overlay_layer_settings(
+    id: cosmic::iced::window::Id,
+) -> cosmic::iced::runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings {
+    use cosmic::cctk::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
+    use cosmic::iced::runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
+
+    SctkLayerSurfaceSettings {
+        id,
+        layer: Layer::Overlay,
+        keyboard_interactivity: KeyboardInteractivity::OnDemand,
+        anchor: Anchor::all(),
+        namespace: "meeting-overlay".to_owned(),
+        size: Some((None, None)),
+        exclusive_zone: -1,
+        ..Default::default()
+    }
+}
+
+/// Live surface settings for the meeting overlay. The overlay fills the whole
+/// output, so it must have square corners: libcosmic otherwise auto-applies the
+/// system rounding, which cosmic-comp rejects on a full-screen layer surface
+/// with a fatal `cosmic_corner_radius_layer_v1` protocol error.
+pub fn overlay_live_settings() -> cosmic::surface::action::LiveSettings {
+    use cosmic::iced::runtime::platform_specific::wayland::CornerRadius;
+    use cosmic::surface::action::LiveSettings;
+
+    LiveSettings {
+        corners: Some(CornerRadius {
+            top_left: 0,
+            top_right: 0,
+            bottom_left: 0,
+            bottom_right: 0,
+        }),
+        ..LiveSettings::default()
+    }
 }
 
 pub fn menu_view<'a>(effective_paused: bool) -> Element<'a, Message> {
@@ -256,20 +320,69 @@ pub struct SettingsHandlers<M: Clone> {
     pub on_toggle_disable_during_weekend: fn(bool) -> M,
     pub on_lead_change: fn(usize) -> M,
     pub on_try_notify: M,
+    pub on_test_overlay: M,
     pub authorize: M,
     pub cancel: M,
 }
 
-#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
-pub fn settings_view<'a, M: Clone + 'static>(
-    form: &'a CredentialsForm,
-    show_title: bool,
-    show_time: bool,
-    show_progress: bool,
+/// The "Notifications" settings group. The lead-time dropdown and the
+/// notification/overlay previews are conditionally shown, so this is split out
+/// to keep `settings_view` readable.
+fn notifications_section<'a, M: Clone + 'static>(
     notify: bool,
     show_meeting_overlay: bool,
     notification_lead_secs: u32,
-    disable_during_weekend: bool,
+    handlers: &SettingsHandlers<M>,
+) -> Element<'a, M> {
+    let mut section = settings::section()
+        .title("Notifications")
+        .add(settings::item(
+            "Enable meeting notifications",
+            toggler(notify).on_toggle(handlers.on_toggle_notify),
+        ))
+        .add(settings::item_row(vec![
+            Column::new()
+                .spacing(2)
+                .width(Length::Fill)
+                .push(text::body("Show meeting overlay"))
+                .push(text::caption(
+                    "Full-screen reminder when a meeting is about to start",
+                ))
+                .into(),
+            toggler(show_meeting_overlay)
+                .on_toggle(handlers.on_toggle_show_meeting_overlay)
+                .into(),
+        ]));
+    // The lead time drives both the desktop notification and the overlay, so
+    // expose it whenever either is enabled.
+    if notify || show_meeting_overlay {
+        let selected = LEAD_PRESETS_SECS
+            .iter()
+            .position(|&s| s == notification_lead_secs);
+        section = section.add(settings::item(
+            "Notify before start",
+            dropdown(&LEAD_LABELS, selected, handlers.on_lead_change),
+        ));
+    }
+    if notify {
+        section = section.add(settings::item(
+            "Preview",
+            button::standard("Try notification").on_press(handlers.on_try_notify.clone()),
+        ));
+    }
+    if show_meeting_overlay {
+        section = section.add(settings::item(
+            "Preview overlay",
+            button::standard("Test notification overlay")
+                .on_press(handlers.on_test_overlay.clone()),
+        ));
+    }
+    section.into()
+}
+
+pub fn settings_view<'a, M: Clone + 'static>(
+    form: &'a CredentialsForm,
+    config: &Config,
     status: &'a Status,
     authorizing: bool,
     handlers: &SettingsHandlers<M>,
@@ -322,57 +435,27 @@ pub fn settings_view<'a, M: Clone + 'static>(
         .title("Display")
         .add(settings::item(
             "Show event time next to icon",
-            toggler(show_time).on_toggle(handlers.on_toggle_show_time),
+            toggler(config.show_time).on_toggle(handlers.on_toggle_show_time),
         ))
         .add(settings::item(
             "Show event title next to countdown",
-            toggler(show_title).on_toggle(handlers.on_toggle_show_title),
+            toggler(config.show_title).on_toggle(handlers.on_toggle_show_title),
         ))
         .add(settings::item(
             "Show meeting progress on icon",
-            toggler(show_progress).on_toggle(handlers.on_toggle_show_progress),
+            toggler(config.show_progress).on_toggle(handlers.on_toggle_show_progress),
         ));
 
-    let mut notifications_section = settings::section()
-        .title("Notifications")
-        .add(settings::item(
-            "Enable meeting notifications",
-            toggler(notify).on_toggle(handlers.on_toggle_notify),
-        ))
-        .add(settings::item_row(vec![
-            Column::new()
-                .spacing(2)
-                .width(Length::Fill)
-                .push(text::body("Show meeting overlay"))
-                .push(text::caption(
-                    "Full-screen reminder when a meeting is about to start",
-                ))
-                .into(),
-            toggler(show_meeting_overlay)
-                .on_toggle(handlers.on_toggle_show_meeting_overlay)
-                .into(),
-        ]));
-    // The lead time drives both the desktop notification and the overlay, so
-    // expose it whenever either is enabled.
-    if notify || show_meeting_overlay {
-        let selected = LEAD_PRESETS_SECS
-            .iter()
-            .position(|&s| s == notification_lead_secs);
-        notifications_section = notifications_section.add(settings::item(
-            "Notify before start",
-            dropdown(&LEAD_LABELS, selected, handlers.on_lead_change),
-        ));
-    }
-    if notify {
-        notifications_section = notifications_section.add(settings::item(
-            "Preview",
-            button::standard("Try notification").on_press(handlers.on_try_notify.clone()),
-        ));
-    }
+    let notifications = notifications_section(
+        config.notify,
+        config.show_meeting_overlay,
+        config.notification_lead_secs,
+        handlers,
+    );
 
     let behavior_section = settings::section().title("Behavior").add(settings::item(
         "Pause on weekends",
-        toggler(disable_during_weekend).on_toggle(handlers.on_toggle_disable_during_weekend),
+        toggler(config.disable_during_weekend).on_toggle(handlers.on_toggle_disable_during_weekend),
     ));
 
     let content = Column::new()
@@ -387,7 +470,7 @@ pub fn settings_view<'a, M: Clone + 'static>(
         .push(actions)
         .push(hint)
         .push(display_section)
-        .push(notifications_section)
+        .push(notifications)
         .push(behavior_section);
 
     scrollable(content)
@@ -437,5 +520,27 @@ mod tests {
         let content = OverlayContent::from_event(&ev(start, start + Duration::minutes(30)), now);
         assert_eq!(content.countdown, "Starting now");
         assert!(content.time.is_some());
+    }
+
+    #[test]
+    fn refresh_recomputes_countdown_after_snooze() {
+        let start = Utc.with_ymd_and_hms(2026, 5, 12, 10, 0, 0).unwrap();
+        // Raised 4 minutes out.
+        let raised = Utc.with_ymd_and_hms(2026, 5, 12, 9, 56, 0).unwrap();
+        let mut content =
+            OverlayContent::from_event(&ev(start, start + Duration::minutes(30)), raised);
+        assert_eq!(content.countdown, "Starting in 4 minutes");
+        // Snoozed a minute; re-shown 1 minute closer.
+        content.refresh(raised + Duration::minutes(1));
+        assert_eq!(content.countdown, "Starting in 3 minutes");
+    }
+
+    #[test]
+    fn refresh_noop_without_event() {
+        let now = Utc.with_ymd_and_hms(2026, 5, 12, 10, 0, 0).unwrap();
+        let mut content = OverlayContent::test();
+        content.refresh(now);
+        // Placeholder content has no backing event, so it is left untouched.
+        assert_eq!(content.countdown, "Starting in 5 minutes");
     }
 }

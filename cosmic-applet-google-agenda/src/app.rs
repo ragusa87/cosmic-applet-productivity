@@ -364,7 +364,7 @@ impl cosmic::Application for AppModel {
                     .take()
                     .map_or_else(Task::none, |id| dispatch_surface(destroy_layer_shell(id)));
                 let reopen = cosmic::task::future(async {
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    tokio::time::sleep(std::time::Duration::from_mins(1)).await;
                     Message::ReopenOverlay
                 });
                 return Task::batch([destroy, reopen]);
@@ -373,7 +373,12 @@ impl cosmic::Application for AppModel {
             Message::ReopenOverlay => {
                 // Re-show only if the snoozed reminder is still pending and no
                 // newer overlay has taken the screen in the meantime.
-                if self.overlay.is_some() && self.overlay_surface.is_none() {
+                if self.overlay_surface.is_none()
+                    && let Some(overlay) = self.overlay.as_mut()
+                {
+                    // Recompute the countdown so it reflects the time now
+                    // remaining, not when the reminder was first raised.
+                    overlay.refresh(Utc::now());
                     let id = Id::unique();
                     self.overlay_surface = Some(id);
                     return open_meeting_overlay(id);
@@ -440,9 +445,14 @@ impl cosmic::Application for AppModel {
                 } else {
                     0
                 };
+                // Notifications and the overlay track the next *upcoming* event,
+                // not `self.next`: the latter prefers a currently-running event
+                // for the widget's busy-state, which would otherwise shadow an
+                // imminent meeting (e.g. while an all-day event is live).
+                let upcoming = next_upcoming(&self.events, now).cloned();
                 let mut overlay_task = Task::none();
                 if let Some(notice) =
-                    decide_notify(self.next.as_ref(), &mut self.notified, lead, now)
+                    decide_notify(upcoming.as_ref(), &mut self.notified, lead, now)
                 {
                     if notify_on {
                         cosmic_google_common::notify::show(&notice.summary, &notice.body, APP_ID);
@@ -450,7 +460,7 @@ impl cosmic::Application for AppModel {
                     // One overlay at a time: skip if one is already on screen.
                     if overlay_on
                         && self.overlay_surface.is_none()
-                        && let Some(ev) = self.next.as_ref()
+                        && let Some(ev) = upcoming.as_ref()
                     {
                         let id = Id::unique();
                         self.overlay = Some(ui::OverlayContent::from_event(ev, now));
@@ -641,46 +651,19 @@ fn open_info_popup(new_id: Id) -> Task<Message> {
     dispatch_surface(action)
 }
 
-/// Layer-shell settings for the meeting overlay: a top-most surface anchored to
-/// every edge so it fills the output, drawn above panels (`exclusive_zone = -1`).
-fn overlay_settings(
-    id: Id,
-) -> cosmic::iced::runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings {
-    use cosmic::cctk::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
-    use cosmic::iced::runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
-
-    SctkLayerSurfaceSettings {
-        id,
-        layer: Layer::Overlay,
-        keyboard_interactivity: KeyboardInteractivity::OnDemand,
-        anchor: Anchor::all(),
-        namespace: "meeting-overlay".to_owned(),
-        size: Some((None, None)),
-        exclusive_zone: -1,
-        ..Default::default()
-    }
-}
-
+/// Open the full-screen meeting overlay as a layer-shell surface, reusing the
+/// shared settings and view so it is identical to the settings preview.
 fn open_meeting_overlay(id: Id) -> Task<Message> {
     let action = surface::action::app_layer_shell::<AppModel>(
-        // The overlay fills the whole output, so it must have square corners.
-        // Force a zero corner radius: libcosmic otherwise auto-applies the
-        // system rounding, which cosmic-comp rejects on a full-screen layer
-        // surface with a fatal `cosmic_corner_radius_layer_v1` protocol error.
-        |_state: &AppModel| LiveSettings {
-            corners: Some(
-                cosmic::iced::runtime::platform_specific::wayland::CornerRadius {
-                    top_left: 0,
-                    top_right: 0,
-                    bottom_left: 0,
-                    bottom_right: 0,
-                },
-            ),
-            ..LiveSettings::default()
-        },
-        move |_state: &mut AppModel| overlay_settings(id),
+        |_state: &AppModel| ui::overlay_live_settings(),
+        move |_state: &mut AppModel| ui::overlay_layer_settings(id),
         Some(Box::new(|state: &AppModel| {
-            ui::meeting_overlay_view(state.overlay.as_ref()).map(cosmic::Action::App)
+            ui::meeting_overlay_view(
+                state.overlay.as_ref(),
+                Message::SnoozeOverlay,
+                Message::DismissOverlay,
+            )
+            .map(cosmic::Action::App)
         })),
     );
     dispatch_surface(action)
@@ -763,6 +746,17 @@ fn select_current(events: &[Event], now: DateTime<Utc>) -> Option<Event> {
     }
     // Nothing running: fall back to the next upcoming event by start time.
     events.iter().find(|e| e.start > now).cloned()
+}
+
+/// The soonest event that has not started yet. Notifications and the meeting
+/// overlay track this, independent of `select_current`/`self.next`, which
+/// prefer a currently-running event and would otherwise hide an imminent
+/// meeting behind an all-day or long-running block.
+fn next_upcoming(events: &[Event], now: DateTime<Utc>) -> Option<&Event> {
+    events
+        .iter()
+        .filter(|e| e.start > now)
+        .min_by_key(|e| e.start)
 }
 
 fn prune_notified(events: &[Event], notified: &mut HashSet<String>) {
@@ -1016,6 +1010,32 @@ mod tests {
         assert_eq!(next.as_ref().map(|e| e.id.as_str()), Some("now-running"));
         assert_eq!(events.len(), 2);
         assert_eq!(idle_since, Some(ts(-1, 0)));
+    }
+
+    #[test]
+    fn next_upcoming_ignores_running_event() {
+        // An all-day/long block is live now; a meeting starts in 5 minutes.
+        // `select_current` (widget busy-state) pins the running block, but the
+        // notification/overlay path must still surface the imminent meeting.
+        let now = ts(0, 0);
+        let mut allday = ev("allday", 0, 0);
+        allday.start = now - Duration::hours(4);
+        allday.end = now + Duration::hours(4);
+        let mut meeting = ev("meeting", 0, 0);
+        meeting.start = now + Duration::minutes(5);
+        meeting.end = now + Duration::minutes(35);
+        let events = vec![allday.clone(), meeting];
+
+        // The widget tracks the running block...
+        assert_eq!(
+            select_current(&events, now).map(|e| e.id),
+            Some("allday".to_owned())
+        );
+        // ...but notifications track the upcoming meeting, and it fires.
+        let upcoming = next_upcoming(&events, now);
+        assert_eq!(upcoming.map(|e| e.id.as_str()), Some("meeting"));
+        let mut notified = HashSet::new();
+        assert!(decide_notify(upcoming, &mut notified, 300, now).is_some());
     }
 
     #[test]

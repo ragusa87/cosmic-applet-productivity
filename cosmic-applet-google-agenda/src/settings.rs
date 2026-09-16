@@ -1,12 +1,14 @@
 use cosmic::Element;
 use cosmic::app::Task;
+use cosmic::iced::window::Id;
 use cosmic::iced::{self, Size};
+use cosmic::surface::{self, action::destroy_layer_shell};
 use cosmic_config::CosmicConfigEntry;
 use cosmic_google_common::auth::{self, OAuthParams};
 use cosmic_google_common::secrets::{self, Tokens};
 
 use crate::config::{APP_ID, Config, KEYRING_SERVICE};
-use crate::ui::{self, CredentialsForm, SettingsHandlers, Status};
+use crate::ui::{self, CredentialsForm, OverlayContent, SettingsHandlers, Status};
 
 const SCOPE: &str = "https://www.googleapis.com/auth/calendar.events.readonly";
 const SUCCESS_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorization complete</title><link rel=\"icon\" href=\"data:,\"></head><body style=\"font-family:sans-serif;text-align:center;padding-top:4em\"><h1>You can close this tab</h1><p>The agenda applet has received your authorization.</p></body></html>";
@@ -32,6 +34,11 @@ pub struct SettingsApp {
     form: CredentialsForm,
     status: Status,
     authorizing: bool,
+    /// Copy rendered on the meeting-overlay preview while it is shown.
+    overlay: Option<OverlayContent>,
+    /// Layer-shell surface id of the overlay preview; `None` when not shown.
+    /// Guards against opening more than one.
+    overlay_surface: Option<Id>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,11 +54,41 @@ pub enum Msg {
     ToggleDisableDuringWeekend(bool),
     SetLeadIdx(usize),
     TryNotify,
+    TestOverlay,
+    CloseOverlay,
     Authorize,
     AuthorizeDone(Result<(String, String, Tokens), String>),
     Cancel,
     SavedAndExit,
     LoadTokens(Option<Tokens>),
+}
+
+impl SettingsApp {
+    /// Kick off the OAuth flow: mark the app busy and spawn the browser-based
+    /// authorization, resolving to `Msg::AuthorizeDone`.
+    fn start_authorization(&mut self) -> Task<Msg> {
+        if self.authorizing || !self.form.is_complete() {
+            return Task::none();
+        }
+        self.authorizing = true;
+        self.status = Status::Authorizing;
+
+        let email = self.form.email.clone();
+        let client_id = self.form.client_id.clone();
+        let client_secret = self.form.client_secret.clone();
+
+        cosmic::task::future(async move {
+            let params = OAuthParams {
+                scope: SCOPE,
+                success_html: SUCCESS_HTML,
+            };
+            let result = auth::start_oauth_flow(params, client_id.clone(), client_secret).await;
+            let result = result
+                .map(|tokens| (email, client_id, tokens))
+                .map_err(|e| e.to_string());
+            Msg::AuthorizeDone(result)
+        })
+    }
 }
 
 impl cosmic::Application for SettingsApp {
@@ -104,6 +141,13 @@ impl cosmic::Application for SettingsApp {
         )
     }
 
+    fn on_close_requested(&self, id: Id) -> Option<Msg> {
+        // The compositor closing the overlay surface (e.g. Esc) should tear down
+        // the preview, not the settings window. Other surfaces fall through to
+        // the default handling.
+        (self.overlay_surface == Some(id)).then_some(Msg::CloseOverlay)
+    }
+
     fn view(&self) -> Element<'_, Self::Message> {
         let handlers = SettingsHandlers {
             on_email: Msg::FormEmail,
@@ -117,18 +161,13 @@ impl cosmic::Application for SettingsApp {
             on_toggle_disable_during_weekend: Msg::ToggleDisableDuringWeekend,
             on_lead_change: Msg::SetLeadIdx,
             on_try_notify: Msg::TryNotify,
+            on_test_overlay: Msg::TestOverlay,
             authorize: Msg::Authorize,
             cancel: Msg::Cancel,
         };
         ui::settings_view(
             &self.form,
-            self.config.show_title,
-            self.config.show_time,
-            self.config.show_progress,
-            self.config.notify,
-            self.config.show_meeting_overlay,
-            self.config.notification_lead_secs,
-            self.config.disable_during_weekend,
+            &self.config,
             &self.status,
             self.authorizing,
             &handlers,
@@ -178,18 +217,24 @@ impl cosmic::Application for SettingsApp {
                 }
             }
 
-            Msg::TryNotify => {
-                // Fire a dummy notification in the same format as a real meeting
-                // reminder (see `decide_notify` in app.rs): summary is the lead
-                // time, body is "<title> — <HH:MM>".
-                let lead_min = self.config.notification_lead_secs / 60;
-                let start = chrono::Local::now()
-                    + chrono::Duration::seconds(i64::from(self.config.notification_lead_secs));
-                cosmic_google_common::notify::show(
-                    &format!("Meeting in {lead_min} min"),
-                    &format!("Team standup \u{2014} {}", start.format("%H:%M")),
-                    APP_ID,
-                );
+            Msg::TryNotify => fire_preview_notification(&self.config),
+
+            Msg::TestOverlay => {
+                // Open the same full-screen layer-shell overlay the applet shows
+                // for a real meeting, with placeholder copy. One at a time.
+                if self.overlay_surface.is_none() {
+                    let id = Id::unique();
+                    self.overlay = Some(OverlayContent::test());
+                    self.overlay_surface = Some(id);
+                    return open_meeting_overlay(id);
+                }
+            }
+
+            Msg::CloseOverlay => {
+                self.overlay = None;
+                if let Some(id) = self.overlay_surface.take() {
+                    return dispatch_surface(destroy_layer_shell(id));
+                }
             }
 
             Msg::LoadTokens(Some(tokens)) => {
@@ -199,30 +244,7 @@ impl cosmic::Application for SettingsApp {
             }
             Msg::LoadTokens(None) => {}
 
-            Msg::Authorize => {
-                if self.authorizing || !self.form.is_complete() {
-                    return Task::none();
-                }
-                self.authorizing = true;
-                self.status = Status::Authorizing;
-
-                let email = self.form.email.clone();
-                let client_id = self.form.client_id.clone();
-                let client_secret = self.form.client_secret.clone();
-
-                return cosmic::task::future(async move {
-                    let params = OAuthParams {
-                        scope: SCOPE,
-                        success_html: SUCCESS_HTML,
-                    };
-                    let result =
-                        auth::start_oauth_flow(params, client_id.clone(), client_secret).await;
-                    let result = result
-                        .map(|tokens| (email, client_id, tokens))
-                        .map_err(|e| e.to_string());
-                    Msg::AuthorizeDone(result)
-                });
-            }
+            Msg::Authorize => return self.start_authorization(),
 
             Msg::AuthorizeDone(Ok((email, client_id, tokens))) => {
                 self.authorizing = false;
@@ -253,6 +275,40 @@ impl cosmic::Application for SettingsApp {
         }
         Task::none()
     }
+}
+
+/// Fire a dummy notification in the same format as a real meeting reminder (see
+/// `decide_notify` in app.rs): summary is the lead time, body is
+/// "<title> — <HH:MM>".
+fn fire_preview_notification(config: &Config) {
+    let lead_min = config.notification_lead_secs / 60;
+    let start =
+        chrono::Local::now() + chrono::Duration::seconds(i64::from(config.notification_lead_secs));
+    cosmic_google_common::notify::show(
+        &format!("Meeting in {lead_min} min"),
+        &format!("Team standup \u{2014} {}", start.format("%H:%M")),
+        APP_ID,
+    );
+}
+
+/// Open the meeting-overlay preview as a layer-shell surface, reusing the same
+/// shared settings and view as the applet so the preview is pixel-identical.
+/// Both overlay buttons map to `CloseOverlay` here — this is a look preview, so
+/// "Snooze" simply dismisses it rather than scheduling a re-show.
+fn open_meeting_overlay(id: Id) -> Task<Msg> {
+    let action = surface::action::app_layer_shell::<SettingsApp>(
+        |_state: &SettingsApp| ui::overlay_live_settings(),
+        move |_state: &mut SettingsApp| ui::overlay_layer_settings(id),
+        Some(Box::new(|state: &SettingsApp| {
+            ui::meeting_overlay_view(state.overlay.as_ref(), Msg::CloseOverlay, Msg::CloseOverlay)
+                .map(cosmic::Action::App)
+        })),
+    );
+    dispatch_surface(action)
+}
+
+fn dispatch_surface(a: surface::Action) -> Task<Msg> {
+    cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(a)))
 }
 
 fn persist_config(config: &Config) {
