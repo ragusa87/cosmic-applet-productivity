@@ -35,6 +35,10 @@ pub struct AppModel {
     pub overlay_surface: Option<Id>,
     /// Copy currently rendered on the overlay. Read by the overlay view closure.
     pub overlay: Option<ui::OverlayContent>,
+    /// Single-instance guard so only one applet process raises the overlay when
+    /// the panel spans several monitors (one process per output). `Some` once
+    /// this instance has claimed ownership; held for the process lifetime.
+    pub overlay_lock: Option<crate::overlay_lock::OverlayLock>,
     pub tokens: Option<Tokens>,
     pub events: Vec<Event>,
     pub next: Option<Event>,
@@ -68,6 +72,19 @@ impl AppModel {
     /// weekend, or the "Pause on weekends" setting appearing ineffective).
     fn reconcile_pause_override(&mut self) {
         self.paused_override = reconciled_override(self.paused_override, self.auto_paused());
+    }
+
+    /// Whether this instance may raise the meeting overlay. Lazily claims the
+    /// single-instance lock the first time it is needed and keeps it for the
+    /// process lifetime, so on a multi-monitor setup exactly one applet process
+    /// owns the overlay. Trying lazily (rather than once at startup) lets a
+    /// surviving instance take over if the previous owner's output was unplugged
+    /// and its process torn down, freeing the lock.
+    fn can_show_overlay(&mut self) -> bool {
+        if self.overlay_lock.is_none() {
+            self.overlay_lock = crate::overlay_lock::OverlayLock::try_acquire();
+        }
+        self.overlay_lock.is_some()
     }
 
     fn wedge_badge_canvas(&self, now: DateTime<Utc>, dot_size: f32) -> Element<'_, Message> {
@@ -466,8 +483,11 @@ impl cosmic::Application for AppModel {
                         cosmic_google_common::notify::show(&notice.summary, &notice.body, APP_ID);
                     }
                     // One overlay at a time: skip if one is already on screen.
+                    // On a multi-monitor panel only the lock-owning instance
+                    // raises it, so the reminder shows (and is dismissed) once.
                     if overlay_on
                         && self.overlay_surface.is_none()
+                        && self.can_show_overlay()
                         && let Some(ev) = upcoming.as_ref()
                     {
                         let id = Id::unique();
