@@ -83,6 +83,16 @@ impl AppModel {
     fn can_show_overlay(&mut self) -> bool {
         if self.overlay_lock.is_none() {
             self.overlay_lock = crate::overlay_lock::OverlayLock::try_acquire();
+            match self.overlay_lock {
+                Some(_) => {
+                    tracing::debug!("overlay lock acquired: this instance owns the overlay");
+                }
+                None => {
+                    tracing::debug!(
+                        "overlay lock held by another instance: suppressing this overlay"
+                    );
+                }
+            }
         }
         self.overlay_lock.is_some()
     }
@@ -202,13 +212,20 @@ impl cosmic::Application for AppModel {
         };
 
         // `--test-overlay`: show the overlay straight away with placeholder copy
-        // so its look can be checked without waiting for a real meeting.
-        let overlay = if flags.test_overlay {
+        // so its look can be checked without waiting for a real meeting. Routed
+        // through the same single-instance lock as real reminders, so launching
+        // two instances demonstrates that only one raises the overlay.
+        let overlay = if flags.test_overlay && app.can_show_overlay() {
             let id = Id::unique();
             app.overlay_surface = Some(id);
             app.overlay = Some(ui::OverlayContent::test());
             open_meeting_overlay(id)
         } else {
+            if flags.test_overlay {
+                tracing::info!(
+                    "--test-overlay: overlay lock held by another instance, not showing"
+                );
+            }
             Task::none()
         };
 
