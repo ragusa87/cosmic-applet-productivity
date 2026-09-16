@@ -38,7 +38,7 @@ pub struct AppModel {
     /// Single-instance guard so only one applet process raises the overlay when
     /// the panel spans several monitors (one process per output). `Some` once
     /// this instance has claimed ownership; held for the process lifetime.
-    pub overlay_lock: Option<crate::overlay_lock::OverlayLock>,
+    pub overlay_lock: Option<cosmic_google_common::single_instance::InstanceLock>,
     pub tokens: Option<Tokens>,
     pub events: Vec<Event>,
     pub next: Option<Event>,
@@ -82,7 +82,8 @@ impl AppModel {
     /// and its process torn down, freeing the lock.
     fn can_show_overlay(&mut self) -> bool {
         if self.overlay_lock.is_none() {
-            self.overlay_lock = crate::overlay_lock::OverlayLock::try_acquire();
+            self.overlay_lock =
+                cosmic_google_common::single_instance::InstanceLock::try_acquire("agenda-overlay");
             match self.overlay_lock {
                 Some(_) => {
                     tracing::debug!("overlay lock acquired: this instance owns the overlay");
