@@ -305,7 +305,7 @@ fn edit_session_row(
     pending_delete: bool,
     today: chrono::NaiveDate,
 ) -> Element<'_, Message> {
-    let desc = cosmic::widget::text_editor(&row.description)
+    let desc = cosmic::widget::TextEditor::new(&row.description)
         .placeholder("description")
         .on_action(move |a| Message::EditSessionDesc(i, a))
         .height(Length::Fixed(64.0));
