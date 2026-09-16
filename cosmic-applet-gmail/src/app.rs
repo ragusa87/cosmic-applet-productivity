@@ -31,6 +31,11 @@ pub struct AppModel {
     /// `Some(true)`/`Some(false)` is an explicit user choice that overrides it
     /// (so "Resume" works even on a weekend, and "Pause" works midweek).
     pub paused_override: Option<bool>,
+    /// Single-instance guard so only one applet process fires the "new mail"
+    /// notification when the panel spans several monitors (one process per
+    /// output). `Some` once this instance has claimed ownership; held for the
+    /// process lifetime.
+    pub notify_lock: Option<cosmic_google_common::single_instance::InstanceLock>,
 }
 
 impl AppModel {
@@ -52,6 +57,25 @@ impl AppModel {
     /// weekend, or a midweek "Pause" never lifting on Monday).
     fn reconcile_pause_override(&mut self) {
         self.paused_override = reconciled_override(self.paused_override, self.auto_paused());
+    }
+
+    /// Whether this instance may fire the "new mail" notification. Lazily claims
+    /// the single-instance lock the first time it is needed and keeps it for the
+    /// process lifetime, so on a multi-monitor setup exactly one applet process
+    /// notifies. Every instance still polls and updates its own unread count;
+    /// only the desktop notification is gated. Trying lazily (rather than once at
+    /// startup) lets a surviving instance take over if the previous owner's
+    /// output was unplugged and its process torn down, freeing the lock.
+    fn can_notify(&mut self) -> bool {
+        if self.notify_lock.is_none() {
+            self.notify_lock =
+                cosmic_google_common::single_instance::InstanceLock::try_acquire("gmail-notify");
+            match self.notify_lock {
+                Some(_) => tracing::debug!("notify lock acquired: this instance notifies"),
+                None => tracing::debug!("notify lock held by another instance: staying silent"),
+            }
+        }
+        self.notify_lock.is_some()
     }
 }
 
@@ -329,6 +353,7 @@ impl cosmic::Application for AppModel {
                 if self.config.notify
                     && let Some(prev) = self.unread
                     && count > prev
+                    && self.can_notify()
                 {
                     let new = count - prev;
                     cosmic_google_common::notify::show(
