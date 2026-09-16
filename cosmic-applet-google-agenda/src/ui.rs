@@ -191,23 +191,17 @@ pub fn overlay_layer_settings(
     }
 }
 
-/// Live surface settings for the meeting overlay. The overlay fills the whole
-/// output, so it must have square corners: libcosmic otherwise auto-applies the
-/// system rounding, which cosmic-comp rejects on a full-screen layer surface
-/// with a fatal `cosmic_corner_radius_layer_v1` protocol error.
+/// Live surface settings for the meeting overlay. Left at the defaults
+/// (`corners: None`) on purpose: the overlay fills the whole output and must
+/// have square corners, but pinning an explicit radius here forces libcosmic to
+/// re-issue a `get_corner_radius_layer` request on every theme/configure event,
+/// and on the COSMIC 1.8 corner-radius manager protocol the second request per
+/// surface raises `corner_radius_exists` (error 0) in a tight loop. Square
+/// corners are instead achieved by clearing `Auto::System` on the applet core
+/// (see `AppModel::init`), which makes libcosmic skip corner handling for this
+/// layer surface entirely.
 pub fn overlay_live_settings() -> cosmic::surface::action::LiveSettings {
-    use cosmic::iced::runtime::platform_specific::wayland::CornerRadius;
-    use cosmic::surface::action::LiveSettings;
-
-    LiveSettings {
-        corners: Some(CornerRadius {
-            top_left: 0,
-            top_right: 0,
-            bottom_left: 0,
-            bottom_right: 0,
-        }),
-        ..LiveSettings::default()
-    }
+    cosmic::surface::action::LiveSettings::default()
 }
 
 pub fn menu_view<'a>(effective_paused: bool) -> Element<'a, Message> {
