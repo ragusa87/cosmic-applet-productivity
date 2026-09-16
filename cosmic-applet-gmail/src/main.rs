@@ -13,9 +13,15 @@ fn main() -> cosmic::iced::Result {
         )
         .init();
 
-    if std::env::args().any(|arg| arg == "--show-settings") {
+    let args: Vec<String> = std::env::args().collect();
+    let has_flag = |name: &str| args.iter().any(|a| a == name);
+
+    if has_flag("--show-settings") {
         settings::run()
     } else {
-        cosmic::applet::run::<app::AppModel>(())
+        let flags = app::Flags {
+            test_notify: has_flag("--test-notify"),
+        };
+        cosmic::applet::run::<app::AppModel>(flags)
     }
 }

@@ -79,6 +79,15 @@ impl AppModel {
     }
 }
 
+/// Launch-time options. `test_notify` is set by the `--test-notify` CLI flag to
+/// fire a placeholder desktop notification at startup, routed through the same
+/// single-instance lock as real mail notifications — so launching two instances
+/// demonstrates that only one notifies.
+#[derive(Debug, Clone, Default)]
+pub struct Flags {
+    pub test_notify: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     LeftClick,
@@ -100,7 +109,7 @@ pub enum Message {
 
 impl cosmic::Application for AppModel {
     type Executor = cosmic::executor::Default;
-    type Flags = ();
+    type Flags = Flags;
     type Message = Message;
 
     const APP_ID: &'static str = APP_ID;
@@ -113,7 +122,7 @@ impl cosmic::Application for AppModel {
         &mut self.core
     }
 
-    fn init(core: cosmic::Core, _flags: Self::Flags) -> (Self, Task<Self::Message>) {
+    fn init(core: cosmic::Core, flags: Self::Flags) -> (Self, Task<Self::Message>) {
         let config = cosmic_config::Config::new(Self::APP_ID, Config::VERSION)
             .map(|ctx| match Config::get_entry(&ctx) {
                 Ok(c) => c,
@@ -121,10 +130,27 @@ impl cosmic::Application for AppModel {
             })
             .unwrap_or_default();
 
-        let app = AppModel {
+        let mut app = AppModel {
             core,
             config: config.clone(),
             ..Default::default()
+        };
+
+        // `--test-notify`: fire a placeholder notification straight away, routed
+        // through the same single-instance lock as real mail notifications, so
+        // launching two instances demonstrates that only one notifies.
+        let test_notify = if flags.test_notify && app.can_notify() {
+            cosmic::task::future(async {
+                cosmic_google_common::notify::show("Test notification", "Gmail", APP_ID);
+                Message::NoOp
+            })
+        } else {
+            if flags.test_notify {
+                tracing::info!(
+                    "--test-notify: notify lock held by another instance, staying silent"
+                );
+            }
+            Task::none()
         };
 
         let task = if config.is_configured() {
@@ -137,7 +163,7 @@ impl cosmic::Application for AppModel {
             Task::none()
         };
 
-        (app, task)
+        (app, Task::batch([task, test_notify]))
     }
 
     fn on_close_requested(&self, id: Id) -> Option<Message> {
