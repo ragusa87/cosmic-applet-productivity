@@ -161,6 +161,14 @@ impl cosmic::Application for AppModel {
             config: config.clone(),
             ..Default::default()
         };
+        // The meeting overlay is a full-screen layer surface that must stay
+        // square. Clearing `Auto::System` makes libcosmic skip corner handling
+        // for layer surfaces, so it never requests a corner-radius object for
+        // the overlay - avoiding the `corner_radius_exists` protocol-error loop
+        // on the COSMIC 1.8 corner-radius manager. Popups keep their rounding
+        // via `Auto::Popup`.
+        app.core
+            .set_auto_corner_radius(cosmic::core::Auto::Popup | cosmic::core::Auto::Window);
         // Seed the edge detector with the real state, so a "Resume" click
         // before the first Tick (e.g. right after a weekend startup) still
         // counts as a paused -> running transition and refetches.

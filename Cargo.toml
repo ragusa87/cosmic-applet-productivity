@@ -40,12 +40,15 @@ url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
-libcosmic = { git = "https://github.com/pop-os/libcosmic.git", default-features = false, features = ["applet", "applet-token", "dbus-config", "multi-window", "tokio", "wayland", "winit"] }
-cosmic-config = { git = "https://github.com/pop-os/libcosmic.git", package = "cosmic-config" }
-cosmic-config-derive = { git = "https://github.com/pop-os/libcosmic.git", package = "cosmic-config-derive" }
+# Pinned to the revisions shipped by COSMIC epoch-1.8.0 so the applets bind the
+# same Wayland protocols (e.g. cosmic_corner_radius_manager_v1) as the installed
+# cosmic-comp. Bump these together with the desktop when COSMIC is upgraded.
+libcosmic = { git = "https://github.com/pop-os/libcosmic.git", rev = "d4d71fd53e5ed6bd3a430089114dffa2da3cd498", default-features = false, features = ["applet", "applet-token", "dbus-config", "multi-window", "tokio", "wayland", "winit"] }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic.git", rev = "d4d71fd53e5ed6bd3a430089114dffa2da3cd498", package = "cosmic-config" }
+cosmic-config-derive = { git = "https://github.com/pop-os/libcosmic.git", rev = "d4d71fd53e5ed6bd3a430089114dffa2da3cd498", package = "cosmic-config-derive" }
 
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols.git", default-features = false, features = ["client"] }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols.git" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols.git", rev = "32283d7", default-features = false, features = ["client"] }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols.git", rev = "32283d7" }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 bitflags = "2"

@@ -2,7 +2,9 @@ use chrono::{Local, NaiveDate};
 use cosmic::Element;
 use cosmic::app::Task;
 use cosmic::iced::{self, Alignment, Length, Size};
-use cosmic::widget::{Column, Row, button, container, scrollable, text, text_editor, text_input};
+use cosmic::widget::{
+    Column, Row, TextEditor, button, container, scrollable, text, text_editor, text_input,
+};
 use cosmic_config::CosmicConfigEntry;
 
 use crate::app::build_block_lines;
@@ -172,7 +174,7 @@ impl cosmic::Application for ExportApp {
             // Selectable read-only editor: edit actions are filtered out
             // by `Msg::CurrentAction`, but click/drag/select/Ctrl+C work.
             container(
-                text_editor(&self.current_content)
+                TextEditor::new(&self.current_content)
                     .placeholder("(no existing section for this date)")
                     .on_action(Msg::CurrentAction)
                     .height(Length::Fixed(160.0)),
@@ -198,7 +200,7 @@ impl cosmic::Application for ExportApp {
 
         let raw_panel: Element<'_, Msg> = if self.show_raw {
             container(
-                text_editor(&self.raw_content)
+                TextEditor::new(&self.raw_content)
                     .placeholder("(no closed sessions for this date)")
                     .on_action(Msg::RawAction)
                     .height(Length::Fixed(160.0)),
@@ -214,7 +216,7 @@ impl cosmic::Application for ExportApp {
                 .into()
         };
 
-        let preview_editor = text_editor(&self.preview_content)
+        let preview_editor = TextEditor::new(&self.preview_content)
             .placeholder("(no closed sessions for this date)")
             .on_action(Msg::PreviewAction)
             .height(Length::Fixed(260.0));
