@@ -1202,6 +1202,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "keyring",
+ "libc",
  "notify-rust",
  "oauth2",
  "serde",

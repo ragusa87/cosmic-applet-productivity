@@ -2,7 +2,6 @@ mod app;
 mod calendar;
 mod config;
 mod debug;
-mod overlay_lock;
 mod settings;
 mod ui;
 
