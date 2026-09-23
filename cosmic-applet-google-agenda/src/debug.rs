@@ -44,6 +44,7 @@ async fn run_async() -> Result<()> {
     println!("  show_title:             {}", config.show_title);
     println!("  show_time:              {}", config.show_time);
     println!("  show_progress:          {}", config.show_progress);
+    println!("  only_accepted_events:   {}", config.only_accepted_events);
     println!();
 
     if !config.is_configured() {
@@ -99,7 +100,7 @@ async fn run_async() -> Result<()> {
     println!();
 
     println!("Fetching events from primary calendar (now → now + 24h)...");
-    let items = calendar::debug_fetch(&tokens.access_token)
+    let items = calendar::debug_fetch(&tokens.access_token, config.only_accepted_events)
         .await
         .context("debug_fetch")?;
     println!("Received {} event(s).", items.len());

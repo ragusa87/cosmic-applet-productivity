@@ -52,6 +52,7 @@ pub enum Msg {
     ToggleNotify(bool),
     ToggleShowMeetingOverlay(bool),
     ToggleDisableDuringWeekend(bool),
+    ToggleOnlyAccepted(bool),
     SetLeadIdx(usize),
     TryNotify,
     TestOverlay,
@@ -159,6 +160,7 @@ impl cosmic::Application for SettingsApp {
             on_toggle_notify: Msg::ToggleNotify,
             on_toggle_show_meeting_overlay: Msg::ToggleShowMeetingOverlay,
             on_toggle_disable_during_weekend: Msg::ToggleDisableDuringWeekend,
+            on_toggle_only_accepted: Msg::ToggleOnlyAccepted,
             on_lead_change: Msg::SetLeadIdx,
             on_try_notify: Msg::TryNotify,
             on_test_overlay: Msg::TestOverlay,
@@ -207,6 +209,11 @@ impl cosmic::Application for SettingsApp {
 
             Msg::ToggleDisableDuringWeekend(on) => {
                 self.config.disable_during_weekend = on;
+                persist_config(&self.config);
+            }
+
+            Msg::ToggleOnlyAccepted(on) => {
+                self.config.only_accepted_events = on;
                 persist_config(&self.config);
             }
 
