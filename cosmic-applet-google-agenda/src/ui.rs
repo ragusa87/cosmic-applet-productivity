@@ -312,6 +312,7 @@ pub struct SettingsHandlers<M: Clone> {
     pub on_toggle_notify: fn(bool) -> M,
     pub on_toggle_show_meeting_overlay: fn(bool) -> M,
     pub on_toggle_disable_during_weekend: fn(bool) -> M,
+    pub on_toggle_only_accepted: fn(bool) -> M,
     pub on_lead_change: fn(usize) -> M,
     pub on_try_notify: M,
     pub on_test_overlay: M,
@@ -447,10 +448,26 @@ pub fn settings_view<'a, M: Clone + 'static>(
         handlers,
     );
 
-    let behavior_section = settings::section().title("Behavior").add(settings::item(
-        "Pause on weekends",
-        toggler(config.disable_during_weekend).on_toggle(handlers.on_toggle_disable_during_weekend),
-    ));
+    let behavior_section = settings::section()
+        .title("Behavior")
+        .add(settings::item(
+            "Pause on weekends",
+            toggler(config.disable_during_weekend)
+                .on_toggle(handlers.on_toggle_disable_during_weekend),
+        ))
+        .add(settings::item_row(vec![
+            Column::new()
+                .spacing(2)
+                .width(Length::Fill)
+                .push(text::body("Only accepted events"))
+                .push(text::caption(
+                    "Ignore invitations you haven't accepted — no listing, reminder or overlay",
+                ))
+                .into(),
+            toggler(config.only_accepted_events)
+                .on_toggle(handlers.on_toggle_only_accepted)
+                .into(),
+        ]));
 
     let content = Column::new()
         .padding(12)

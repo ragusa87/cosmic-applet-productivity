@@ -567,8 +567,9 @@ impl cosmic::Application for AppModel {
                 }
                 let client_id = self.config.client_id.clone();
                 let email = self.config.email.clone();
+                let only_accepted = self.config.only_accepted_events;
                 return cosmic::task::future(async move {
-                    let result = refresh_and_fetch(&client_id, &email, tokens)
+                    let result = refresh_and_fetch(&client_id, &email, tokens, only_accepted)
                         .await
                         .map_err(|e| e.to_string());
                     Message::Fetched(result)
@@ -719,6 +720,7 @@ async fn refresh_and_fetch(
     client_id: &str,
     email: &str,
     tokens: Tokens,
+    only_accepted: bool,
 ) -> anyhow::Result<(Tokens, Vec<Event>)> {
     let tokens = if tokens.is_access_token_fresh() {
         tokens
@@ -729,7 +731,7 @@ async fn refresh_and_fetch(
         }
         new
     };
-    let events = calendar::upcoming_events(&tokens.access_token).await?;
+    let events = calendar::upcoming_events(&tokens.access_token, only_accepted).await?;
     Ok((tokens, events))
 }
 

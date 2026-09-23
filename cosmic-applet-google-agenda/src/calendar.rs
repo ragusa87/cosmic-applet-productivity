@@ -20,6 +20,7 @@ pub enum SkipReason {
     AllDay,
     Free,
     Declined,
+    NotAccepted,
     OutOfOffice,
     WorkingLocation,
 }
@@ -31,6 +32,9 @@ impl std::fmt::Display for SkipReason {
             Self::AllDay => f.write_str("all-day (no precise start time)"),
             Self::Free => f.write_str("transparency=transparent (Free-marked)"),
             Self::Declined => f.write_str("self responseStatus=declined"),
+            Self::NotAccepted => {
+                f.write_str("self responseStatus not accepted (only-accepted filter)")
+            }
             Self::OutOfOffice => f.write_str("eventType=outOfOffice"),
             Self::WorkingLocation => f.write_str("eventType=workingLocation"),
         }
@@ -54,14 +58,17 @@ pub struct DebugItem {
     pub verdict: Result<Event, SkipReason>,
 }
 
-pub async fn upcoming_events(access_token: &str) -> Result<Vec<Event>> {
+pub async fn upcoming_events(access_token: &str, only_accepted: bool) -> Result<Vec<Event>> {
     let items = fetch_raw(access_token).await?;
-    Ok(filter_and_map(items))
+    Ok(filter_and_map(items, only_accepted))
 }
 
-pub async fn debug_fetch(access_token: &str) -> Result<Vec<DebugItem>> {
+pub async fn debug_fetch(access_token: &str, only_accepted: bool) -> Result<Vec<DebugItem>> {
     let items = fetch_raw(access_token).await?;
-    Ok(items.into_iter().map(to_debug_item).collect())
+    Ok(items
+        .into_iter()
+        .map(|raw| to_debug_item(raw, only_accepted))
+        .collect())
 }
 
 async fn fetch_raw(access_token: &str) -> Result<Vec<RawEvent>> {
@@ -92,18 +99,32 @@ async fn fetch_raw(access_token: &str) -> Result<Vec<RawEvent>> {
     Ok(parsed.items)
 }
 
-fn filter_and_map(items: Vec<RawEvent>) -> Vec<Event> {
-    let mut events: Vec<Event> = items.into_iter().filter_map(map_event).collect();
+fn filter_and_map(items: Vec<RawEvent>, only_accepted: bool) -> Vec<Event> {
+    let mut events: Vec<Event> = items
+        .into_iter()
+        .filter_map(|raw| map_event(raw, only_accepted))
+        .collect();
     events.sort_by_key(|e| e.start);
     events
 }
 
-fn map_event(raw: RawEvent) -> Option<Event> {
-    classify(&raw).ok()?;
+fn map_event(raw: RawEvent, only_accepted: bool) -> Option<Event> {
+    classify(&raw, only_accepted).ok()?;
     Some(build_event(raw))
 }
 
-fn classify(raw: &RawEvent) -> Result<DateTime<Utc>, SkipReason> {
+/// The self attendee's RSVP status ("accepted" / "declined" / "tentative" /
+/// "needsAction"), or `None` when the user isn't listed as an attendee — e.g.
+/// a personal event you created that has no invitees.
+fn self_response(raw: &RawEvent) -> Option<&str> {
+    raw.attendees
+        .iter()
+        .flatten()
+        .find(|a| a.self_attendee)
+        .and_then(|a| a.response_status.as_deref())
+}
+
+fn classify(raw: &RawEvent, only_accepted: bool) -> Result<DateTime<Utc>, SkipReason> {
     if raw.status.as_deref() == Some("cancelled") {
         return Err(SkipReason::Cancelled);
     }
@@ -115,13 +136,18 @@ fn classify(raw: &RawEvent) -> Result<DateTime<Utc>, SkipReason> {
     if raw.transparency.as_deref() == Some("transparent") {
         return Err(SkipReason::Free);
     }
-    if raw
-        .attendees
-        .iter()
-        .flatten()
-        .any(|a| a.self_attendee && a.response_status.as_deref() == Some("declined"))
-    {
+    let self_response = self_response(raw);
+    if self_response == Some("declined") {
         return Err(SkipReason::Declined);
+    }
+    // "Only accepted events": drop invitations the user hasn't positively
+    // accepted (tentative / needsAction). Events with no self attendee have no
+    // RSVP to accept and are kept, mirroring the all-day/free global rules.
+    if only_accepted
+        && let Some(resp) = self_response
+        && resp != "accepted"
+    {
+        return Err(SkipReason::NotAccepted);
     }
     // All-day events have `start.date` set, not `start.dateTime`.
     raw.start.date_time.ok_or(SkipReason::AllDay)
@@ -147,14 +173,9 @@ fn build_event(raw: RawEvent) -> Event {
     }
 }
 
-fn to_debug_item(raw: RawEvent) -> DebugItem {
-    let verdict_result = classify(&raw);
-    let self_response = raw
-        .attendees
-        .iter()
-        .flatten()
-        .find(|a| a.self_attendee)
-        .and_then(|a| a.response_status.clone());
+fn to_debug_item(raw: RawEvent, only_accepted: bool) -> DebugItem {
+    let verdict_result = classify(&raw, only_accepted);
+    let self_response = self_response(&raw).map(str::to_owned);
     let attendee_count = raw.attendees.as_ref().map_or(0, Vec::len);
     let id = raw.id.clone();
     let summary = raw
@@ -285,7 +306,12 @@ mod tests {
 
     fn parse(json: &str) -> Vec<Event> {
         let resp: EventsResponse = serde_json::from_str(json).unwrap();
-        filter_and_map(resp.items)
+        filter_and_map(resp.items, false)
+    }
+
+    fn parse_only_accepted(json: &str) -> Vec<Event> {
+        let resp: EventsResponse = serde_json::from_str(json).unwrap();
+        filter_and_map(resp.items, true)
     }
 
     #[test]
@@ -343,6 +369,55 @@ mod tests {
         let events = parse(json);
         let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["ok1", "ok2"]);
+    }
+
+    #[test]
+    fn only_accepted_drops_tentative_and_needs_action() {
+        let json = r#"{
+            "items": [
+                {
+                    "id": "accepted",
+                    "summary": "Accepted",
+                    "status": "confirmed",
+                    "start": { "dateTime": "2026-05-12T09:00:00Z" },
+                    "end":   { "dateTime": "2026-05-12T09:30:00Z" },
+                    "attendees": [ { "self": true, "responseStatus": "accepted" } ]
+                },
+                {
+                    "id": "tentative",
+                    "summary": "Maybe",
+                    "status": "confirmed",
+                    "start": { "dateTime": "2026-05-12T10:00:00Z" },
+                    "end":   { "dateTime": "2026-05-12T10:30:00Z" },
+                    "attendees": [ { "self": true, "responseStatus": "tentative" } ]
+                },
+                {
+                    "id": "needsaction",
+                    "summary": "Unanswered invite",
+                    "status": "confirmed",
+                    "start": { "dateTime": "2026-05-12T11:00:00Z" },
+                    "end":   { "dateTime": "2026-05-12T11:30:00Z" },
+                    "attendees": [ { "self": true, "responseStatus": "needsAction" } ]
+                },
+                {
+                    "id": "solo",
+                    "summary": "Personal event, no invitees",
+                    "status": "confirmed",
+                    "start": { "dateTime": "2026-05-12T12:00:00Z" },
+                    "end":   { "dateTime": "2026-05-12T12:30:00Z" }
+                }
+            ]
+        }"#;
+
+        // With the filter off, only the declined-style rules apply: everything stays.
+        let all_events = parse(json);
+        let all: Vec<&str> = all_events.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(all, vec!["accepted", "tentative", "needsaction", "solo"]);
+
+        // With the filter on, only the accepted invite and the solo (no-RSVP) event survive.
+        let kept_events = parse_only_accepted(json);
+        let kept: Vec<&str> = kept_events.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(kept, vec!["accepted", "solo"]);
     }
 
     #[test]
