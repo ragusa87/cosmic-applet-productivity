@@ -76,9 +76,11 @@ impl cosmic::Application for AppModel {
         let (pad_major, pad_minor) = self.core.applet.suggested_padding(true);
         let icon_px = f32::from(icon_size);
 
-        let icon = cosmic::widget::icon(cosmic::widget::icon::from_svg_bytes(
-            SLACK_ICON_SVG.to_vec(),
-        ))
+        // Grey the icon (render it symbolic/monochrome) while Slack isn't running.
+        let icon = cosmic::widget::icon(
+            cosmic::widget::icon::from_svg_bytes(SLACK_ICON_SVG.to_vec())
+                .symbolic(!self.slack_running),
+        )
         .size(icon_size);
 
         let badge_label = if self.slack_running {
