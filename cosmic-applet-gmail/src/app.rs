@@ -35,7 +35,7 @@ pub struct AppModel {
     /// notification when the panel spans several monitors (one process per
     /// output). `Some` once this instance has claimed ownership; held for the
     /// process lifetime.
-    pub notify_lock: Option<cosmic_google_common::single_instance::InstanceLock>,
+    pub notify_gate: cosmic_google_common::single_instance::RoleGate,
 }
 
 impl AppModel {
@@ -67,15 +67,7 @@ impl AppModel {
     /// startup) lets a surviving instance take over if the previous owner's
     /// output was unplugged and its process torn down, freeing the lock.
     fn can_notify(&mut self) -> bool {
-        if self.notify_lock.is_none() {
-            self.notify_lock =
-                cosmic_google_common::single_instance::InstanceLock::try_acquire("gmail-notify");
-            match self.notify_lock {
-                Some(_) => tracing::debug!("notify lock acquired: this instance notifies"),
-                None => tracing::debug!("notify lock held by another instance: staying silent"),
-            }
-        }
-        self.notify_lock.is_some()
+        self.notify_gate.acquired("gmail-notify")
     }
 }
 

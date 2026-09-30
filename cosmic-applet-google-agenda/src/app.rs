@@ -36,9 +36,14 @@ pub struct AppModel {
     /// Copy currently rendered on the overlay. Read by the overlay view closure.
     pub overlay: Option<ui::OverlayContent>,
     /// Single-instance guard so only one applet process raises the overlay when
-    /// the panel spans several monitors (one process per output). `Some` once
-    /// this instance has claimed ownership; held for the process lifetime.
-    pub overlay_lock: Option<cosmic_google_common::single_instance::InstanceLock>,
+    /// the panel spans several monitors (one process per output). Claimed lazily
+    /// and held for the process lifetime.
+    pub overlay_gate: cosmic_google_common::single_instance::RoleGate,
+    /// Single-instance guard so only one applet process fires the "meeting
+    /// starting" notification on a multi-monitor panel. Separate from
+    /// `overlay_gate` because notifications and the overlay are toggled
+    /// independently.
+    pub notify_gate: cosmic_google_common::single_instance::RoleGate,
     pub tokens: Option<Tokens>,
     pub events: Vec<Event>,
     pub next: Option<Event>,
@@ -81,21 +86,15 @@ impl AppModel {
     /// surviving instance take over if the previous owner's output was unplugged
     /// and its process torn down, freeing the lock.
     fn can_show_overlay(&mut self) -> bool {
-        if self.overlay_lock.is_none() {
-            self.overlay_lock =
-                cosmic_google_common::single_instance::InstanceLock::try_acquire("agenda-overlay");
-            match self.overlay_lock {
-                Some(_) => {
-                    tracing::debug!("overlay lock acquired: this instance owns the overlay");
-                }
-                None => {
-                    tracing::debug!(
-                        "overlay lock held by another instance: suppressing this overlay"
-                    );
-                }
-            }
-        }
-        self.overlay_lock.is_some()
+        self.overlay_gate.acquired("agenda-overlay")
+    }
+
+    /// Whether this instance may fire the "meeting starting" notification. Gated
+    /// the same way as the overlay so a multi-monitor setup notifies once, but
+    /// through a separate lock since notifications and the overlay are toggled
+    /// independently.
+    fn can_notify(&mut self) -> bool {
+        self.notify_gate.acquired("agenda-notify")
     }
 
     fn wedge_badge_canvas(&self, now: DateTime<Utc>, dot_size: f32) -> Element<'_, Message> {
@@ -497,7 +496,10 @@ impl cosmic::Application for AppModel {
                 if let Some(notice) =
                     decide_notify(upcoming.as_ref(), &mut self.notified, lead, now)
                 {
-                    if notify_on {
+                    // `can_notify()` last, so the lock is only claimed once a
+                    // notification is actually due. On a multi-monitor panel only
+                    // the lock-owning instance fires it, so it shows once.
+                    if notify_on && self.can_notify() {
                         cosmic_google_common::notify::show(&notice.summary, &notice.body, APP_ID);
                     }
                     // One overlay at a time: skip if one is already on screen.
