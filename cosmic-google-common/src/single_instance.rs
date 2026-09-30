@@ -47,6 +47,33 @@ impl InstanceLock {
     }
 }
 
+/// A lazily-claimed single-instance role. Wraps an [`InstanceLock`] so a caller
+/// can gate a once-per-session side effect (a notification, an overlay) without
+/// re-attempting the bind on every tick. On a multi-monitor panel exactly one
+/// applet process wins the role; a survivor can take it over once a freed role
+/// is available (e.g. the previous owner's output was unplugged).
+#[derive(Default)]
+pub struct RoleGate {
+    lock: Option<InstanceLock>,
+}
+
+impl RoleGate {
+    /// Whether this instance owns `key`. Lazily claims the lock the first time it
+    /// is needed and keeps it for the process lifetime. `key` names the role,
+    /// e.g. `"agenda-notify"`; pick a distinct key per role. Always call with the
+    /// same key for a given gate.
+    pub fn acquired(&mut self, key: &str) -> bool {
+        if self.lock.is_none() {
+            self.lock = InstanceLock::try_acquire(key);
+            match self.lock {
+                Some(_) => tracing::debug!(role = key, "single-instance role acquired"),
+                None => tracing::debug!(role = key, "single-instance role held elsewhere"),
+            }
+        }
+        self.lock.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +100,30 @@ mod tests {
         assert!(
             a.is_some() && b.is_some(),
             "different names are independent"
+        );
+    }
+
+    #[test]
+    fn role_gate_owns_once_and_locks_out_a_second_gate() {
+        // A test-only key so it can't collide with a running applet's roles.
+        let key = "test-role-gate";
+        let mut first = RoleGate::default();
+        assert!(first.acquired(key), "the first gate should win the role");
+        assert!(
+            first.acquired(key),
+            "a held role stays owned on repeat checks"
+        );
+
+        let mut second = RoleGate::default();
+        assert!(
+            !second.acquired(key),
+            "a second gate must not own a role held elsewhere"
+        );
+
+        drop(first);
+        assert!(
+            second.acquired(key),
+            "the role is claimable again once the holder is dropped"
         );
     }
 }
