@@ -20,7 +20,7 @@ authors = ["Laurent Constantin"]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 configparser = "3"
-dirs = "6"
+dirs = "7"
 futures-util = "0.3"
 keyring = "4"
 libc = "0.2"
@@ -38,7 +38,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
-zbus = { version = "5", default-features = false, features = ["tokio"] }
+zbus = { version = "6", default-features = false, features = ["tokio"] }
 
 # Pinned to the revisions shipped by COSMIC epoch-1.8.0 so the applets bind the
 # same Wayland protocols (e.g. cosmic_corner_radius_manager_v1) as the installed
